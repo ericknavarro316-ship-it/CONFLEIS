@@ -16,6 +16,10 @@ st.set_page_config(page_title="Sistema Contable de Despacho", page_icon="📈", 
 # Inicializar Base de Datos
 db.init_db()
 
+# Importar módulos de Fase 4 (DIOT y Conciliación)
+import diot_generator as diot
+import bank_reconciliation as br
+
 # Menú lateral
 st.sidebar.title("Navegación")
 opciones = [
@@ -23,6 +27,8 @@ opciones = [
     "Personas Físicas", 
     "Personas Morales", 
     "Cálculo de Impuestos y XML", 
+    "Conciliación Bancaria y DIOT",
+    "Descarga Masiva SAT",
     "Calendario General", 
     "Expediente de Cliente",
     "Control de Honorarios"
@@ -336,11 +342,126 @@ elif seleccion == "Cálculo de Impuestos y XML":
                                           st.error(f"Retenciones Nómina a Pagar: $ {resumen_mensual.get('ISR_Retenido_Nomina_Total', 0) + resumen_mensual.get('IMSS_Retenido_Nomina_Total', 0):,.2f}")
                                           
                                      st.write("---")
+                                     # Generar y descargar PDF
                                      pdf_bytes = rg.generar_pdf(datos_cliente, "Mes Actual", resultados, df_facturas)
                                      st.download_button("📄 Descargar Reporte en PDF para el Cliente", data=pdf_bytes, file_name=f"Reporte_Impuestos_{rfc_cliente}.pdf", mime="application/pdf", type="primary")
+                                     
+                                     # Generar y descargar TXT de DIOT (Carga Batch A29)
+                                     st.write("---")
+                                     st.subheader("5. Generar DIOT (Declaración Informativa de Operaciones con Terceros)")
+                                     st.write("Genera el archivo TXT oficial para carga batch en el programa A29 del SAT.")
+                                     
+                                     txt_diot = diot.generar_txt_diot(df_facturas, rfc_cliente)
+                                     if txt_diot:
+                                         st.download_button(
+                                             label="📥 Descargar Carga Batch DIOT (.txt)",
+                                             data=txt_diot,
+                                             file_name=f"DIOT_{rfc_cliente}.txt",
+                                             mime="text/plain",
+                                             type="secondary"
+                                         )
+                                     else:
+                                         st.info("No se encontraron Gastos/Compras pagadas (PUE) en este mes para generar la DIOT.")
                        except Exception as e:
                            st.error(f"Ocurrió un error al procesar: {e}")
                            st.code(traceback.format_exc())
+
+elif seleccion == "Conciliación Bancaria y DIOT":
+    st.title("🏦 Conciliación Bancaria Inteligente")
+    st.write("Cruza los movimientos de tu estado de cuenta bancario (Excel) contra los XMLs procesados del mes para encontrar diferencias.")
+    
+    st.info("Requisito: Primero procesa los XMLs en el módulo 'Cálculo de Impuestos y XML' y descarga el 'Papel de Trabajo (Excel)'. Usarás ese archivo aquí.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("1. Sube el Papel de Trabajo (XMLs)")
+        archivo_xmls = st.file_uploader("Papel de Trabajo (XMLs extraídos)", type=["xlsx"])
+        
+    with col2:
+        st.subheader("2. Sube el Estado de Cuenta (Banco)")
+        archivo_banco = st.file_uploader("Estado de Cuenta (Excel descargado del banco)", type=["xlsx", "xls"])
+        
+    if archivo_xmls and archivo_banco:
+        if st.button("Realizar Conciliación", type="primary"):
+            with st.spinner("Cruzando RFCs, Montos y Fechas..."):
+                # Leer Papel de Trabajo
+                df_xmls = pd.read_excel(archivo_xmls)
+                
+                # Leer y parsear banco genérico
+                df_banco_limpio, msj = br.parsear_estado_cuenta(archivo_banco)
+                
+                if df_banco_limpio is None:
+                    st.error(msj)
+                else:
+                    # Ejecutar algoritmo de conciliación
+                    banco_conciliado, xmls_huerfanos, msj_con = br.conciliar_movimientos(df_banco_limpio, df_xmls)
+                    
+                    st.success("¡Conciliación Completada!")
+                    
+                    tab1, tab2, tab3 = st.tabs(["Movimientos Bancarios Conciliados", "Depósitos/Retiros Sin XML (Posible Discrepancia)", "XMLs (PUE) Sin Pago en Banco"])
+                    
+                    with tab1:
+                        st.write("Movimientos del banco que encontraron un XML correspondiente por monto exacto:")
+                        st.dataframe(banco_conciliado[banco_conciliado['Match'] != 'No Conciliado'], use_container_width=True)
+                        
+                    with tab2:
+                        st.write("⚠️ Alerta Fiscal: Tienes movimientos de dinero en el banco pero NO encontramos un XML emitido/recibido por esa cantidad. Revisa si son traspasos, préstamos, ingresos no facturados, o comisiones.")
+                        no_conciliados = banco_conciliado[banco_conciliado['Match'] == 'No Conciliado']
+                        st.dataframe(no_conciliados, use_container_width=True)
+                        st.metric("Total Retiros Sin XML", f"$ {no_conciliados['Retiro'].sum():,.2f}")
+                        st.metric("Total Depósitos Sin XML", f"$ {no_conciliados['Deposito'].sum():,.2f}")
+                        
+                    with tab3:
+                        st.write("⚠️ XMLs marcados como Pagados (PUE) que no aparecen reflejados en el banco por ese monto exacto. Podrían haber sido pagados en efectivo, compensación, o depositados en otra cuenta.")
+                        if not xmls_huerfanos.empty:
+                            st.dataframe(xmls_huerfanos[['Fecha', 'Serie_Folio', 'Tipo', 'Emisor_Nombre', 'Total']], use_container_width=True)
+
+elif seleccion == "Descarga Masiva SAT":
+    st.title("☁️ Conexión y Descarga Masiva del SAT")
+    st.write("Módulo avanzado para conectar directamente con los servidores del SAT y descargar todos los XML (Emitidos y Recibidos) y Metadata.")
+    
+    st.info("""
+    **Aviso Técnico y Legal:**
+    La descarga masiva directa desde el portal del SAT (sin captcha) requiere conectarse al **Web Service Oficial del SAT**. 
+    Para establecer este canal seguro, es **estrictamente obligatorio** firmar las peticiones electrónicas utilizando la e.firma (Archivo .CER, Archivo .KEY y Contraseña Privada) del contribuyente.
+    
+    Por razones de seguridad y cumplimiento normativo (Compliance), este entorno demo no almacena ni procesa archivos .KEY reales. 
+    A continuación se muestra la interfaz que utilizarás cuando despliegues este sistema en tu servidor privado seguro.
+    """)
+    
+    clientes_df = db.obtener_clientes()
+    if clientes_df.empty:
+        st.warning("No hay clientes registrados.")
+    else:
+        clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
+        opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
+        cliente_seleccionado = st.selectbox("Selecciona un Cliente para conectar al SAT:", list(opciones_cli.keys()))
+        
+        with st.form("descarga_sat"):
+            st.subheader("Parámetros de Descarga (Web Service)")
+            col1, col2 = st.columns(2)
+            with col1:
+                 fecha_inicio = st.date_input("Fecha Inicial")
+                 tipo_descarga = st.selectbox("Tipo de Comprobantes", ["Emitidos", "Recibidos", "Ambos"])
+            with col2:
+                 fecha_fin = st.date_input("Fecha Final")
+                 tipo_archivo = st.selectbox("Formato de Descarga", ["XML", "Metadata (TXT)"])
+                 
+            st.write("---")
+            st.subheader("Firma de la Solicitud (e.firma obligatoria)")
+            cer_file = st.file_uploader("Certificado (.CER)", type=["cer"])
+            key_file = st.file_uploader("Llave Privada (.KEY)", type=["key"])
+            password = st.text_input("Contraseña de la Llave Privada", type="password")
+            
+            if st.form_submit_button("Conectar y Solicitar Descarga (Simulación)"):
+                if not cer_file or not key_file or not password:
+                    st.error("Error: Para establecer la conexión SOAP con el Web Service del SAT necesitas subir la e.firma completa.")
+                else:
+                    with st.spinner("Autenticando con el SAT... Generando Token... Enviando Solicitud..."):
+                        import time
+                        time.sleep(3) # Simular conexión
+                        st.success("¡Solicitud Aceptada por el SAT! (Simulación)")
+                        st.info(f"El SAT ha recibido tu petición para descargar los XMLs {tipo_descarga} del {fecha_inicio} al {fecha_fin}. El paquete de archivos estará listo para descargar en unos minutos según la disponibilidad de sus servidores.")
 
 elif seleccion == "Expediente de Cliente":
     st.title("📂 Historial y Análisis del Cliente")
