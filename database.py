@@ -103,8 +103,128 @@ def init_db():
         )
     ''')
     
+    # Tabla de Usuarios del Despacho (Socio, Auxiliar)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios_despacho (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            usuario TEXT NOT NULL UNIQUE,
+            contrasena TEXT NOT NULL,
+            rol TEXT NOT NULL DEFAULT 'Auxiliar'
+        )
+    ''')
+    
+    # Tabla de Asignaciones (Auxiliar -> Cliente)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS asignaciones_clientes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario_id INTEGER,
+            cliente_id INTEGER,
+            FOREIGN KEY (usuario_id) REFERENCES usuarios_despacho (id) ON DELETE CASCADE,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Tabla de Notificaciones (Historial/Cola)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS notificaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            tipo TEXT NOT NULL,
+            mensaje TEXT NOT NULL,
+            fecha_envio DATETIME DEFAULT CURRENT_TIMESTAMP,
+            estado TEXT DEFAULT 'Enviado',
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
+    conn.commit()
+    
+    # Insert default admin if none exists
+    cursor.execute("SELECT COUNT(*) FROM usuarios_despacho WHERE rol='Administrador'")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol) VALUES ('Administrador General', 'admin', 'admin', 'Administrador')")
+        conn.commit()
+
+    conn.close()
+
+# --- Funciones para Usuarios y Asignaciones ---
+
+def verificar_login_equipo(usuario, contrasena):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre, rol FROM usuarios_despacho WHERE usuario = ? AND contrasena = ?", (usuario, contrasena))
+    resultado = cursor.fetchone()
+    conn.close()
+    return resultado
+
+def obtener_usuarios_despacho():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT id, nombre, usuario, rol FROM usuarios_despacho", conn)
+    conn.close()
+    return df
+
+def agregar_usuario_despacho(nombre, usuario, contrasena, rol):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol) VALUES (?, ?, ?, ?)", (nombre, usuario, contrasena, rol))
+        conn.commit()
+        return True, "Usuario agregado."
+    except sqlite3.IntegrityError:
+        return False, "El nombre de usuario ya existe."
+    finally:
+        conn.close()
+
+def eliminar_usuario_despacho(usuario_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM usuarios_despacho WHERE id = ?", (usuario_id,))
     conn.commit()
     conn.close()
+
+def asignar_cliente_a_usuario(usuario_id, cliente_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM asignaciones_clientes WHERE usuario_id = ? AND cliente_id = ?", (usuario_id, cliente_id))
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO asignaciones_clientes (usuario_id, cliente_id) VALUES (?, ?)", (usuario_id, cliente_id))
+        conn.commit()
+    conn.close()
+
+def desasignar_cliente_de_usuario(usuario_id, cliente_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM asignaciones_clientes WHERE usuario_id = ? AND cliente_id = ?", (usuario_id, cliente_id))
+    conn.commit()
+    conn.close()
+    
+def obtener_asignaciones(usuario_id):
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT cliente_id FROM asignaciones_clientes WHERE usuario_id = ?", conn, params=(usuario_id,))
+    conn.close()
+    return df['cliente_id'].tolist() if not df.empty else []
+
+# --- Funciones para Notificaciones ---
+
+def registrar_notificacion(cliente_id, tipo, mensaje):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO notificaciones (cliente_id, tipo, mensaje) VALUES (?, ?, ?)", (cliente_id, tipo, mensaje))
+    conn.commit()
+    conn.close()
+
+def obtener_notificaciones():
+    conn = sqlite3.connect(DB_NAME)
+    query = '''
+        SELECT n.id, c.nombre as Cliente, n.tipo as Medio, n.mensaje as Mensaje, n.fecha_envio, n.estado 
+        FROM notificaciones n
+        JOIN clientes c ON n.cliente_id = c.id
+        ORDER BY n.fecha_envio DESC
+    '''
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
 
 # --- Funciones para Clientes ---
 

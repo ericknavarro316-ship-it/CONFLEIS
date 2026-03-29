@@ -28,37 +28,81 @@ import os
 ARCHIVOS_DIR = "archivos_clientes"
 os.makedirs(ARCHIVOS_DIR, exist_ok=True)
 
-# Gestión de Sesiones para Portal de Clientes
+# Gestión de Sesiones para Portal de Clientes y Equipo
 if "logged_in_client" not in st.session_state:
     st.session_state.logged_in_client = None
 
+if "logged_in_staff" not in st.session_state:
+    st.session_state.logged_in_staff = None
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
+
+# --- Lógica de Autenticación de Equipo (Staff) y Clientes ---
+if not st.session_state.logged_in_staff and not st.session_state.logged_in_client:
+    st.title("🔐 Acceso al Sistema Contable")
+    tab1, tab2 = st.tabs(["Acceso Despacho (Staff)", "Acceso Clientes"])
+    
+    with tab1:
+        st.subheader("Login de Equipo")
+        staff_user = st.text_input("Usuario")
+        staff_pass = st.text_input("Contraseña", type="password", key="staff_pass")
+        if st.button("Ingresar (Staff)"):
+            staff_data = db.verificar_login_equipo(staff_user, staff_pass)
+            if staff_data:
+                st.session_state.logged_in_staff = {'id': staff_data[0], 'nombre': staff_data[1], 'rol': staff_data[2]}
+                st.success(f"Bienvenido {staff_data[1]} ({staff_data[2]})")
+                st.rerun()
+            else:
+                st.error("Credenciales de staff incorrectas.")
+                
+    with tab2:
+        st.subheader("Portal del Cliente")
+        rfc_login = st.text_input("RFC", key="login_rfc")
+        pass_login = st.text_input("Contraseña", type="password", key="login_pass")
+        if st.button("Ingresar (Cliente)"):
+            cliente_data = db.verificar_login_cliente(rfc_login, pass_login)
+            if cliente_data:
+                st.session_state.logged_in_client = {'id': cliente_data[0], 'nombre': cliente_data[1], 'rfc': rfc_login.upper()}
+                st.success(f"Bienvenido {cliente_data[1]}")
+                st.rerun()
+            else:
+                st.error("RFC o contraseña incorrectos.")
+    st.stop() # Detener ejecución si no hay nadie logueado
+
 
 # Menú lateral dinámico según quién está logueado
 st.sidebar.title("Navegación")
 
 if st.session_state.logged_in_client:
-    st.sidebar.success(f"Logueado como: {st.session_state.logged_in_client['nombre']}")
-    opciones = ["Mi Portal (Cliente)"]
+    st.sidebar.success(f"Logueado como Cliente: {st.session_state.logged_in_client['nombre']}")
+    opciones = ["Mi Portal (Cliente)", "🤖 Asistente Fiscal AI"]
     if st.sidebar.button("Cerrar Sesión"):
          st.session_state.logged_in_client = None
          st.rerun()
-else:
+elif st.session_state.logged_in_staff:
+    staff = st.session_state.logged_in_staff
+    st.sidebar.success(f"Logueado como: {staff['nombre']} ({staff['rol']})")
+    if st.sidebar.button("Cerrar Sesión"):
+        st.session_state.logged_in_staff = None
+        st.rerun()
+        
     opciones = [
-        "Mi Despacho (Finanzas)",
-        "Dashboard", 
+        "Dashboard",
         "Personas Físicas", 
         "Personas Morales", 
-        "Cálculo de Impuestos y XML", 
+        "Cálculo de Impuestos y XML",
         "Conciliación Bancaria y DIOT",
-        "Descarga Masiva SAT",
-        "Calendario General", 
+        "Descarga Masiva SAT (Simulador)",
+        "Exportación a CONTPAQi",
+        "Calendario General",
         "Expediente de Cliente",
-        "Control de Honorarios",
-        "Portal del Cliente (Login)",
         "🤖 Asistente Fiscal AI"
     ]
+    if staff['rol'] == 'Administrador':
+        opciones = ["Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Notificaciones a Clientes"] + opciones + ["Control de Honorarios"]
+else:
+    opciones = []
 
 seleccion = st.sidebar.radio("Ir a:", opciones)
 
@@ -98,6 +142,14 @@ def estilo_semaforo(val):
     return f'color: {color}'
 
 # ---------- Vistas de la Aplicación ----------
+
+# Helpers para filtrado de clientes por rol
+def obtener_clientes_permitidos(tipo_persona=None):
+    df_todos = obtener_clientes_permitidos(tipo_persona)
+    if st.session_state.logged_in_staff and st.session_state.logged_in_staff['rol'] == 'Auxiliar':
+        asignaciones = db.obtener_asignaciones(st.session_state.logged_in_staff['id'])
+        return df_todos[df_todos['id'].isin(asignaciones)]
+    return df_todos
 
 if seleccion == "Mi Despacho (Finanzas)":
     st.title("💼 Dashboard Financiero del Despacho")
@@ -151,7 +203,7 @@ elif seleccion == "Dashboard":
     
     col1, col2, col3 = st.columns(3)
     
-    clientes_df = db.obtener_clientes()
+    clientes_df = obtener_clientes_permitidos()
     total_clientes = len(clientes_df)
     total_fisicas = len(clientes_df[clientes_df['tipo_persona'] == 'Física']) if not clientes_df.empty else 0
     total_morales = len(clientes_df[clientes_df['tipo_persona'] == 'Moral']) if not clientes_df.empty else 0
@@ -190,7 +242,7 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
     
     with tab1:
         st.subheader(f"Lista de Personas {tipo_persona}s")
-        clientes_df = db.obtener_clientes(tipo_persona)
+        clientes_df = obtener_clientes_permitidos(tipo_persona)
         
         if clientes_df.empty:
             st.info(f"No hay personas {tipo_persona.lower()}s registradas.")
@@ -309,7 +361,7 @@ elif seleccion == "Calendario General":
                         
     with tab2:
         st.subheader("Asignar Nueva Obligación")
-        clientes_df = db.obtener_clientes()
+        clientes_df = obtener_clientes_permitidos()
         if clientes_df.empty:
             st.warning("Primero debes registrar clientes.")
         else:
@@ -334,7 +386,7 @@ elif seleccion == "Cálculo de Impuestos y XML":
     st.title("🧮 Cálculo Automático de Impuestos y Nóminas (XML)")
     st.write("Sube los XMLs (CFDI) de Ingresos, Gastos y Nóminas del mes para calcular automáticamente el IVA, el ISR, retenciones y exportar tus papeles de trabajo.")
     
-    clientes_df = db.obtener_clientes()
+    clientes_df = obtener_clientes_permitidos()
     if clientes_df.empty:
         st.warning("No hay clientes registrados en el sistema.")
     else:
@@ -504,7 +556,7 @@ elif seleccion == "Conciliación Bancaria y DIOT":
                         if not xmls_huerfanos.empty:
                             st.dataframe(xmls_huerfanos[['Fecha', 'Serie_Folio', 'Tipo', 'Emisor_Nombre', 'Total']], use_container_width=True)
 
-elif seleccion == "Descarga Masiva SAT":
+elif seleccion == "Descarga Masiva SAT (Simulador)":
     st.title("☁️ Conexión y Descarga Masiva del SAT")
     st.write("Módulo avanzado para conectar directamente con los servidores del SAT y descargar todos los XML (Emitidos y Recibidos) y Metadata.")
     
@@ -517,7 +569,7 @@ elif seleccion == "Descarga Masiva SAT":
     A continuación se muestra la interfaz que utilizarás cuando despliegues este sistema en tu servidor privado seguro.
     """)
     
-    clientes_df = db.obtener_clientes()
+    clientes_df = obtener_clientes_permitidos()
     if clientes_df.empty:
         st.warning("No hay clientes registrados.")
     else:
@@ -554,7 +606,7 @@ elif seleccion == "Descarga Masiva SAT":
 elif seleccion == "Expediente de Cliente":
     st.title("📂 Historial, CRM y Archivo del Cliente")
     
-    clientes_df = db.obtener_clientes()
+    clientes_df = obtener_clientes_permitidos()
     if clientes_df.empty:
         st.warning("No hay clientes registrados en el sistema.")
     else:
@@ -786,7 +838,7 @@ elif seleccion == "Control de Honorarios":
     st.title("💼 Control de Honorarios del Despacho")
     st.write("Administra la cobranza de igualas mensuales o servicios extraordinarios de tus clientes.")
     
-    clientes_df = db.obtener_clientes()
+    clientes_df = obtener_clientes_permitidos()
     if clientes_df.empty:
         st.warning("Primero registra clientes en el Directorio.")
     else:
@@ -845,3 +897,115 @@ elif seleccion == "Control de Honorarios":
                     db.agregar_honorario(dict_cli[cli_sel], mes, anio, monto, notas)
                     st.success("Cargo registrado exitosamente.")
                     st.rerun()
+if seleccion == "Gestión de Equipo (Admin)":
+    st.header("Gestión de Equipo y Asignaciones")
+    tab_users, tab_assign = st.tabs(["Usuarios del Despacho", "Asignación de Clientes"])
+    
+    with tab_users:
+        st.subheader("Registrar Nuevo Usuario")
+        with st.form("form_nuevo_usuario"):
+            nombre_u = st.text_input("Nombre Completo")
+            usuario_u = st.text_input("Usuario (Login)")
+            pass_u = st.text_input("Contraseña", type="password")
+            rol_u = st.selectbox("Rol", ["Administrador", "Auxiliar"])
+            if st.form_submit_button("Guardar Usuario"):
+                if nombre_u and usuario_u and pass_u:
+                    ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, rol_u)
+                    if ok: st.success(msg)
+                    else: st.error(msg)
+                else:
+                    st.warning("Completa todos los campos.")
+                    
+        st.subheader("Usuarios Registrados")
+        df_users = db.obtener_usuarios_despacho()
+        if not df_users.empty:
+            for idx, row in df_users.iterrows():
+                col1, col2, col3, col4 = st.columns([3,2,2,1])
+                col1.write(f"**{row['nombre']}**")
+                col2.write(row['usuario'])
+                col3.write(row['rol'])
+                if row['usuario'] != 'admin':
+                    if col4.button("Eliminar", key=f"del_user_{row['id']}"):
+                        db.eliminar_usuario_despacho(row['id'])
+                        st.rerun()
+        else:
+            st.info("No hay usuarios registrados.")
+            
+    with tab_assign:
+        st.subheader("Asignar Clientes a Auxiliares")
+        df_auxiliares = df_users[df_users['rol'] == 'Auxiliar']
+        if not df_auxiliares.empty:
+            aux_sel_nombre = st.selectbox("Selecciona un Auxiliar", df_auxiliares['nombre'].tolist())
+            aux_id = df_auxiliares[df_auxiliares['nombre'] == aux_sel_nombre]['id'].values[0]
+            
+            df_todos_clientes = db.obtener_clientes()
+            clientes_asignados = db.obtener_asignaciones(aux_id)
+            
+            st.write(f"Clientes asignados a **{aux_sel_nombre}**:")
+            for idx, row in df_todos_clientes.iterrows():
+                asignado = row['id'] in clientes_asignados
+                nuevo_estado = st.checkbox(f"{row['nombre']} ({row['rfc']})", value=asignado, key=f"assign_{aux_id}_{row['id']}")
+                if nuevo_estado != asignado:
+                    if nuevo_estado:
+                        db.asignar_cliente_a_usuario(aux_id, row['id'])
+                    else:
+                        db.desasignar_cliente_de_usuario(aux_id, row['id'])
+                    st.rerun()
+        else:
+            st.info("No hay auxiliares registrados.")
+
+if seleccion == "Descarga Masiva SAT (Simulador)":
+    st.title("⬇️ Descarga Masiva del SAT (Simulador)")
+    st.write("Conexión al Web Service del SAT para descargar facturas automáticamente.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        clientes = db.obtener_clientes()
+        if not clientes.empty:
+            cliente_rfc = st.selectbox("Seleccionar Cliente (RFC)", clientes['rfc'].tolist())
+            fecha_inicio = st.date_input("Fecha Inicio", date(datetime.now().year, datetime.now().month, 1))
+            fecha_fin = st.date_input("Fecha Fin", date.today())
+            
+            if st.button("Sincronizar con Web Service del SAT", type="primary"):
+                import time
+                progress_text = "Conectando al SAT y descargando XMLs..."
+                my_bar = st.progress(0, text=progress_text)
+                for percent_complete in range(100):
+                    time.sleep(0.02)
+                    my_bar.progress(percent_complete + 1, text=progress_text)
+                
+                cliente_id = clientes[clientes['rfc'] == cliente_rfc]['id'].values[0]
+                db.agregar_nota_crm(cliente_id, f"Descarga masiva de XMLs del {fecha_inicio} al {fecha_fin} completada (Simulador).")
+                st.success("¡Descarga de 15 XMLs completada exitosamente!")
+                st.balloons()
+        else:
+            st.info("No hay clientes registrados.")
+
+if seleccion == "Notificaciones a Clientes":
+    st.title("📲 Panel de Notificaciones (WhatsApp / Email)")
+    st.write("Envía recordatorios masivos a tus clientes sobre pagos o estados de cuenta.")
+    
+    with st.form("form_notificaciones"):
+        clientes = db.obtener_clientes()
+        if not clientes.empty:
+            destinatarios = st.multiselect("Seleccionar Destinatarios", clientes['nombre'].tolist())
+            medio = st.selectbox("Medio de Envío", ["WhatsApp", "Email"])
+            mensaje = st.text_area("Mensaje a enviar", "Hola,\n\nTe recordamos que se acerca la fecha límite para el pago de impuestos. Por favor, compártenos tus estados de cuenta para el cierre del mes.\n\nSaludos,\nEl Despacho Contable")
+            
+            if st.form_submit_button("Enviar (Simulación)"):
+                if destinatarios and mensaje:
+                    for dest in destinatarios:
+                        cliente_id = clientes[clientes['nombre'] == dest]['id'].values[0]
+                        db.registrar_notificacion(cliente_id, medio, mensaje)
+                    st.success(f"¡Mensajes enviados a {len(destinatarios)} clientes por {medio}!")
+                else:
+                    st.warning("Selecciona al menos un destinatario y escribe un mensaje.")
+        else:
+            st.info("No hay clientes registrados.")
+            
+    st.subheader("Historial de Envíos")
+    historial = db.obtener_notificaciones()
+    if not historial.empty:
+        st.dataframe(historial, hide_index=True)
+    else:
+        st.write("No hay notificaciones enviadas aún.")
