@@ -16,9 +16,11 @@ st.set_page_config(page_title="Sistema Contable de Despacho", page_icon="📈", 
 # Inicializar Base de Datos
 db.init_db()
 
-# Importar módulos de Fase 4 (DIOT y Conciliación)
+# Importar módulos de Fase 4 y 5 (DIOT, Conciliación, Portal y IA)
 import diot_generator as diot
 import bank_reconciliation as br
+import polizas_generator as contpaqi
+import ai_assistant as ai
 
 import os
 
@@ -26,20 +28,38 @@ import os
 ARCHIVOS_DIR = "archivos_clientes"
 os.makedirs(ARCHIVOS_DIR, exist_ok=True)
 
-# Menú lateral
+# Gestión de Sesiones para Portal de Clientes
+if "logged_in_client" not in st.session_state:
+    st.session_state.logged_in_client = None
+
+if "chat_history" not in st.session_state:
+    st.session_state.chat_history = []
+
+# Menú lateral dinámico según quién está logueado
 st.sidebar.title("Navegación")
-opciones = [
-    "Mi Despacho (Finanzas)",
-    "Dashboard", 
-    "Personas Físicas", 
-    "Personas Morales", 
-    "Cálculo de Impuestos y XML", 
-    "Conciliación Bancaria y DIOT",
-    "Descarga Masiva SAT",
-    "Calendario General", 
-    "Expediente de Cliente",
-    "Control de Honorarios"
-]
+
+if st.session_state.logged_in_client:
+    st.sidebar.success(f"Logueado como: {st.session_state.logged_in_client['nombre']}")
+    opciones = ["Mi Portal (Cliente)"]
+    if st.sidebar.button("Cerrar Sesión"):
+         st.session_state.logged_in_client = None
+         st.rerun()
+else:
+    opciones = [
+        "Mi Despacho (Finanzas)",
+        "Dashboard", 
+        "Personas Físicas", 
+        "Personas Morales", 
+        "Cálculo de Impuestos y XML", 
+        "Conciliación Bancaria y DIOT",
+        "Descarga Masiva SAT",
+        "Calendario General", 
+        "Expediente de Cliente",
+        "Control de Honorarios",
+        "Portal del Cliente (Login)",
+        "🤖 Asistente Fiscal AI"
+    ]
+
 seleccion = st.sidebar.radio("Ir a:", opciones)
 
 # ---------- Funciones Auxiliares para el Semáforo ----------
@@ -399,22 +419,37 @@ elif seleccion == "Cálculo de Impuestos y XML":
                                      pdf_bytes = rg.generar_pdf(datos_cliente, "Mes Actual", resultados, df_facturas)
                                      st.download_button("📄 Descargar Reporte en PDF para el Cliente", data=pdf_bytes, file_name=f"Reporte_Impuestos_{rfc_cliente}.pdf", mime="application/pdf", type="primary")
                                      
-                                     # Generar y descargar TXT de DIOT (Carga Batch A29)
+                                     # Generar y descargar TXT de DIOT (Carga Batch A29) y CONTPAQi
                                      st.write("---")
-                                     st.subheader("5. Generar DIOT (Declaración Informativa de Operaciones con Terceros)")
-                                     st.write("Genera el archivo TXT oficial para carga batch en el programa A29 del SAT.")
+                                     st.subheader("5. Exportaciones Masivas (DIOT y CONTPAQi)")
                                      
-                                     txt_diot = diot.generar_txt_diot(df_facturas, rfc_cliente)
-                                     if txt_diot:
-                                         st.download_button(
-                                             label="📥 Descargar Carga Batch DIOT (.txt)",
-                                             data=txt_diot,
-                                             file_name=f"DIOT_{rfc_cliente}.txt",
-                                             mime="text/plain",
-                                             type="secondary"
-                                         )
-                                     else:
-                                         st.info("No se encontraron Gastos/Compras pagadas (PUE) en este mes para generar la DIOT.")
+                                     col_diot, col_cont = st.columns(2)
+                                     with col_diot:
+                                         st.write("**Declaración DIOT (A29)**")
+                                         txt_diot = diot.generar_txt_diot(df_facturas, rfc_cliente)
+                                         if txt_diot:
+                                             st.download_button(
+                                                 label="📥 Descargar TXT DIOT",
+                                                 data=txt_diot,
+                                                 file_name=f"DIOT_{rfc_cliente}.txt",
+                                                 mime="text/plain"
+                                             )
+                                         else:
+                                             st.info("Sin gastos PUE.")
+                                             
+                                     with col_cont:
+                                         st.write("**Pólizas CONTPAQi**")
+                                         txt_polizas = contpaqi.generar_polizas_contpaqi(df_facturas, rfc_cliente)
+                                         if txt_polizas:
+                                             st.download_button(
+                                                 label="📥 Descargar TXT Pólizas",
+                                                 data=txt_polizas,
+                                                 file_name=f"Polizas_{rfc_cliente}.txt",
+                                                 mime="text/plain"
+                                             )
+                                         else:
+                                             st.info("Sin XMLs procesados.")
+                                             
                        except Exception as e:
                            st.error(f"Ocurrió un error al procesar: {e}")
                            st.code(traceback.format_exc())
@@ -668,6 +703,84 @@ elif seleccion == "Expediente de Cliente":
                        if st.button("Eliminar nota", key=f"del_nota_{n_row['id']}", type="tertiary"):
                             db.eliminar_nota_crm(n_row['id'])
                             st.rerun()
+
+elif seleccion == "Portal del Cliente (Login)":
+    st.title("🔐 Acceso para Clientes")
+    st.write("Ingresa tu RFC y la contraseña proporcionada por tu contador para acceder a tu información fiscal.")
+    
+    with st.form("login_form"):
+        rfc_login = st.text_input("RFC")
+        pwd_login = st.text_input("Contraseña", type="password")
+        if st.form_submit_button("Ingresar"):
+            if not rfc_login or not pwd_login:
+                st.error("Por favor llena ambos campos.")
+            else:
+                cliente_data = db.verificar_login_cliente(rfc_login, pwd_login)
+                if cliente_data:
+                    st.session_state.logged_in_client = {'id': cliente_data[0], 'nombre': cliente_data[1], 'rfc': rfc_login.upper()}
+                    st.rerun()
+                else:
+                    st.error("Credenciales incorrectas. Verifica tu RFC y contraseña.")
+
+elif seleccion == "Mi Portal (Cliente)":
+    cliente_info = st.session_state.logged_in_client
+    st.title(f"🏢 Bienvenido, {cliente_info['nombre']}")
+    st.write(f"**RFC:** {cliente_info['rfc']}")
+    
+    tab1, tab2 = st.tabs(["Mis Obligaciones y Alertas", "Enviar Documentos al Contador"])
+    
+    with tab1:
+        st.subheader("Semáforo Fiscal")
+        st.write("Estas son tus obligaciones fiscales vigentes y su estado actual:")
+        mis_obligaciones = db.obtener_obligaciones(cliente_id=cliente_info['id'])
+        if mis_obligaciones.empty:
+             st.info("No tienes obligaciones pendientes en este momento.")
+        else:
+             ob_semaforo = calcular_semaforo(mis_obligaciones)
+             cols_to_show = ['semaforo', 'descripcion', 'fecha_limite', 'estado']
+             st.dataframe(
+                 ob_semaforo[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                 use_container_width=True, hide_index=True
+             )
+             
+    with tab2:
+        st.subheader("Buzón Seguro")
+        st.write("Sube tus estados de cuenta, facturas o comprobantes. El despacho los recibirá inmediatamente en tu expediente.")
+        
+        doc_upload = st.file_uploader("Seleccionar Archivo (PDF, Excel, Imágenes)", key="client_upload")
+        if st.button("Enviar al Despacho") and doc_upload:
+             dir_cliente = os.path.join(ARCHIVOS_DIR, cliente_info['rfc'])
+             os.makedirs(dir_cliente, exist_ok=True)
+             safe_name = f"PORTAL_{datetime.today().strftime('%Y%m%d_%H%M%S')}_{doc_upload.name.replace(' ', '_')}"
+             file_path = os.path.join(dir_cliente, safe_name)
+             
+             with open(file_path, "wb") as f:
+                 f.write(doc_upload.getbuffer())
+                 
+             db.registrar_documento_portal(cliente_info['id'], doc_upload.name, file_path)
+             st.success("¡Documento enviado exitosamente! Tu contador ha sido notificado.")
+
+elif seleccion == "🤖 Asistente Fiscal AI":
+    st.title("🤖 Asistente Fiscal con Inteligencia Artificial")
+    st.write("Pregúntame sobre topes de deducciones, viáticos, recargos o tasas de impuestos (RESICO).")
+    
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("Escribe tu duda fiscal aquí... (Ej. '¿Cuál es el tope para deducir un automóvil?')"):
+        # Agregar mensaje de usuario
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        # Generar respuesta de AI
+        respuesta_ai = ai.obtener_respuesta_fiscal(prompt)
+        
+        # Mostrar y guardar respuesta
+        with st.chat_message("assistant"):
+            st.markdown(respuesta_ai)
+        st.session_state.chat_history.append({"role": "assistant", "content": respuesta_ai})
 
 elif seleccion == "Control de Honorarios":
     st.title("💼 Control de Honorarios del Despacho")

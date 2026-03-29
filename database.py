@@ -20,7 +20,8 @@ def init_db():
             email TEXT,
             telefono TEXT,
             fecha_registro DATE DEFAULT CURRENT_DATE,
-            etiquetas TEXT DEFAULT ''
+            etiquetas TEXT DEFAULT '',
+            password_portal TEXT DEFAULT ''
         )
     ''')
     
@@ -33,6 +34,21 @@ def init_db():
     if 'etiquetas' not in columns:
         try: cursor.execute("ALTER TABLE clientes ADD COLUMN etiquetas TEXT DEFAULT ''")
         except: pass
+    if 'password_portal' not in columns:
+        try: cursor.execute("ALTER TABLE clientes ADD COLUMN password_portal TEXT DEFAULT ''")
+        except: pass
+
+    # Tabla de Documentos Compartidos (Cliente -> Contador)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS documentos_portal (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            nombre_archivo TEXT NOT NULL,
+            ruta_archivo TEXT NOT NULL,
+            fecha_subida DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
 
     # Tabla de Obligaciones
     cursor.execute('''
@@ -129,6 +145,34 @@ def actualizar_etiquetas_cliente(cliente_id, nuevas_etiquetas):
     cursor.execute("UPDATE clientes SET etiquetas = ? WHERE id = ?", (nuevas_etiquetas, cliente_id))
     conn.commit()
     conn.close()
+
+def actualizar_password_portal(cliente_id, nuevo_password):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE clientes SET password_portal = ? WHERE id = ?", (nuevo_password, cliente_id))
+    conn.commit()
+    conn.close()
+    
+def verificar_login_cliente(rfc, password):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, nombre FROM clientes WHERE rfc = ? AND password_portal = ?", (rfc.upper(), password))
+    resultado = cursor.fetchone()
+    conn.close()
+    return resultado # (id, nombre) o None
+
+def registrar_documento_portal(cliente_id, nombre_archivo, ruta_archivo):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO documentos_portal (cliente_id, nombre_archivo, ruta_archivo) VALUES (?, ?, ?)", (cliente_id, nombre_archivo, ruta_archivo))
+    conn.commit()
+    conn.close()
+    
+def obtener_documentos_portal(cliente_id):
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM documentos_portal WHERE cliente_id = ? ORDER BY fecha_subida DESC", conn, params=(cliente_id,))
+    conn.close()
+    return df
 
 # --- Funciones para Obligaciones ---
 
