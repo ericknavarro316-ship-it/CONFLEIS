@@ -19,18 +19,20 @@ def init_db():
             regimen TEXT,
             email TEXT,
             telefono TEXT,
-            fecha_registro DATE DEFAULT CURRENT_DATE
+            fecha_registro DATE DEFAULT CURRENT_DATE,
+            etiquetas TEXT DEFAULT ''
         )
     ''')
     
-    # Check if we need to migrate existing data (if we already had a DB sin tipo_persona)
+    # Migración de columnas si ya existía la BD
     cursor.execute("PRAGMA table_info(clientes)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'tipo_persona' not in columns:
-        try:
-             cursor.execute("ALTER TABLE clientes ADD COLUMN tipo_persona TEXT NOT NULL DEFAULT 'Física'")
-        except Exception as e:
-             pass
+        try: cursor.execute("ALTER TABLE clientes ADD COLUMN tipo_persona TEXT NOT NULL DEFAULT 'Física'")
+        except: pass
+    if 'etiquetas' not in columns:
+        try: cursor.execute("ALTER TABLE clientes ADD COLUMN etiquetas TEXT DEFAULT ''")
+        except: pass
 
     # Tabla de Obligaciones
     cursor.execute('''
@@ -73,19 +75,31 @@ def init_db():
         )
     ''')
     
+    # Tabla de Notas CRM (Bitácora de interacciones)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS notas_crm (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
+            contenido TEXT NOT NULL,
+            autor TEXT DEFAULT 'Contador',
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
 # --- Funciones para Clientes ---
 
-def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono):
+def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas=""):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT INTO clientes (nombre, rfc, tipo_persona, regimen, email, telefono)
-            VALUES (?, ?, ?, ?, ?, ?)
-        ''', (nombre, rfc, tipo_persona, regimen, email, telefono))
+            INSERT INTO clientes (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas))
         conn.commit()
         return True, "Cliente agregado exitosamente."
     except sqlite3.IntegrityError:
@@ -109,6 +123,13 @@ def eliminar_cliente(cliente_id):
     conn.commit()
     conn.close()
 
+def actualizar_etiquetas_cliente(cliente_id, nuevas_etiquetas):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE clientes SET etiquetas = ? WHERE id = ?", (nuevas_etiquetas, cliente_id))
+    conn.commit()
+    conn.close()
+
 # --- Funciones para Obligaciones ---
 
 def agregar_obligacion(cliente_id, descripcion, fecha_limite, notas=""):
@@ -123,8 +144,6 @@ def agregar_obligacion(cliente_id, descripcion, fecha_limite, notas=""):
 
 def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
-    
-    # Construcción de query dinámica
     query = '''
         SELECT o.id, c.nombre as Cliente, o.descripcion, o.fecha_limite, o.estado, o.notas
         FROM obligaciones o
@@ -132,33 +151,25 @@ def obtener_obligaciones(tipo_persona=None, cliente_id=None):
         WHERE 1=1
     '''
     params = []
-    
     if tipo_persona:
         query += " AND c.tipo_persona = ?"
         params.append(tipo_persona)
-        
     if cliente_id:
         query += " AND c.id = ?"
         params.append(cliente_id)
         
     query += " ORDER BY o.fecha_limite ASC"
-    
     df = pd.read_sql_query(query, conn, params=tuple(params))
     
     if not df.empty:
         df['fecha_limite'] = pd.to_datetime(df['fecha_limite']).dt.date
-        
     conn.close()
     return df
 
 def actualizar_estado_obligacion(obligacion_id, nuevo_estado):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute('''
-        UPDATE obligaciones
-        SET estado = ?
-        WHERE id = ?
-    ''', (nuevo_estado, obligacion_id))
+    cursor.execute("UPDATE obligaciones SET estado = ? WHERE id = ?", (nuevo_estado, obligacion_id))
     conn.commit()
     conn.close()
 
@@ -210,7 +221,7 @@ def obtener_honorarios(cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
     query = '''
         SELECT h.id, c.nombre as Cliente, h.mes as Mes, h.anio as Año, h.monto as Monto, 
-               h.estado as Estado, h.fecha_pago, h.notas
+               h.estado as Estado, h.fecha_pago, h.notas, c.id as cliente_id
         FROM honorarios h
         JOIN clientes c ON h.cliente_id = c.id
         WHERE 1=1
@@ -221,7 +232,6 @@ def obtener_honorarios(cliente_id=None):
         params.append(cliente_id)
         
     query += " ORDER BY h.anio DESC, h.mes DESC"
-    
     df = pd.read_sql_query(query, conn, params=tuple(params))
     conn.close()
     return df
@@ -230,12 +240,7 @@ def actualizar_estado_honorario(honorario_id, nuevo_estado):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     fecha_pago = datetime.today().strftime('%Y-%m-%d') if nuevo_estado == 'Pagado' else None
-    
-    cursor.execute('''
-        UPDATE honorarios
-        SET estado = ?, fecha_pago = ?
-        WHERE id = ?
-    ''', (nuevo_estado, fecha_pago, honorario_id))
+    cursor.execute("UPDATE honorarios SET estado = ?, fecha_pago = ? WHERE id = ?", (nuevo_estado, fecha_pago, honorario_id))
     conn.commit()
     conn.close()
 
@@ -243,5 +248,27 @@ def eliminar_honorario(honorario_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM honorarios WHERE id = ?", (honorario_id,))
+    conn.commit()
+    conn.close()
+
+# --- Funciones para Notas CRM (Bitácora) ---
+
+def agregar_nota_crm(cliente_id, contenido, autor="Contador"):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO notas_crm (cliente_id, contenido, autor) VALUES (?, ?, ?)", (cliente_id, contenido, autor))
+    conn.commit()
+    conn.close()
+
+def obtener_notas_crm(cliente_id):
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM notas_crm WHERE cliente_id = ? ORDER BY fecha DESC", conn, params=(cliente_id,))
+    conn.close()
+    return df
+
+def eliminar_nota_crm(nota_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM notas_crm WHERE id = ?", (nota_id,))
     conn.commit()
     conn.close()

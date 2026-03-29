@@ -20,9 +20,16 @@ db.init_db()
 import diot_generator as diot
 import bank_reconciliation as br
 
+import os
+
+# Asegurar que el directorio de archivos existe
+ARCHIVOS_DIR = "archivos_clientes"
+os.makedirs(ARCHIVOS_DIR, exist_ok=True)
+
 # Menú lateral
 st.sidebar.title("Navegación")
 opciones = [
+    "Mi Despacho (Finanzas)",
     "Dashboard", 
     "Personas Físicas", 
     "Personas Morales", 
@@ -72,7 +79,53 @@ def estilo_semaforo(val):
 
 # ---------- Vistas de la Aplicación ----------
 
-if seleccion == "Dashboard":
+if seleccion == "Mi Despacho (Finanzas)":
+    st.title("💼 Dashboard Financiero del Despacho")
+    st.write("Resumen ejecutivo de la cobranza y rentabilidad de tu firma contable.")
+    
+    honorarios_df = db.obtener_honorarios()
+    if honorarios_df.empty:
+        st.info("Aún no tienes honorarios registrados. Ve a 'Control de Honorarios' para empezar a facturar.")
+    else:
+        # Calcular KPIs
+        total_facturado = honorarios_df['Monto'].sum()
+        total_cobrado = honorarios_df[honorarios_df['Estado'] == 'Pagado']['Monto'].sum()
+        total_pendiente = honorarios_df[honorarios_df['Estado'] == 'Pendiente']['Monto'].sum()
+        
+        # Calcular tasa de morosidad
+        tasa_morosidad = (total_pendiente / total_facturado * 100) if total_facturado > 0 else 0
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+             st.metric("Total Cobrado (Histórico)", f"$ {total_cobrado:,.2f}")
+        with col2:
+             st.metric("Total por Cobrar (Pendiente)", f"$ {total_pendiente:,.2f}", delta=f"-{tasa_morosidad:.1f}% Morosidad", delta_color="inverse")
+        with col3:
+             # Mejor cliente (el que más ha pagado)
+             if total_cobrado > 0:
+                 df_pagados = honorarios_df[honorarios_df['Estado'] == 'Pagado']
+                 mejor_cliente = df_pagados.groupby('Cliente')['Monto'].sum().idxmax()
+                 st.metric("Top Cliente (Ingresos)", mejor_cliente)
+             else:
+                 st.metric("Top Cliente", "N/A")
+                 
+        st.write("---")
+        st.subheader("Ingresos por Mes")
+        
+        # Agrupar por mes y año para la gráfica
+        df_grafica = honorarios_df.copy()
+        # Crear columna de ordenamiento temporal
+        df_grafica['Orden'] = df_grafica['Año'].astype(str) + " " + df_grafica['Mes']
+        
+        df_agrupado = df_grafica.groupby(['Orden', 'Estado'])['Monto'].sum().reset_index()
+        
+        if not df_agrupado.empty:
+             fig = px.bar(df_agrupado, x='Orden', y='Monto', color='Estado', 
+                          color_discrete_map={'Pagado': '#2ecc71', 'Pendiente': '#e74c3c'},
+                          title="Cobranza Mensual", barmode='stack')
+             st.plotly_chart(fig, use_container_width=True)
+
+elif seleccion == "Dashboard":
     st.title("📊 Panel Principal")
     st.write("Bienvenido a tu Sistema de Control Contable.")
     
@@ -464,7 +517,7 @@ elif seleccion == "Descarga Masiva SAT":
                         st.info(f"El SAT ha recibido tu petición para descargar los XMLs {tipo_descarga} del {fecha_inicio} al {fecha_fin}. El paquete de archivos estará listo para descargar en unos minutos según la disponibilidad de sus servidores.")
 
 elif seleccion == "Expediente de Cliente":
-    st.title("📂 Historial y Análisis del Cliente")
+    st.title("📂 Historial, CRM y Archivo del Cliente")
     
     clientes_df = db.obtener_clientes()
     if clientes_df.empty:
@@ -476,58 +529,145 @@ elif seleccion == "Expediente de Cliente":
         
         cliente_id = opciones_cli[cliente_seleccionado]
         datos_cliente = clientes_df[clientes_df['id'] == cliente_id].iloc[0]
+        rfc_cli = datos_cliente['rfc']
         
         st.write("---")
-        st.subheader(f"👤 {datos_cliente['nombre']}")
-        col1, col2 = st.columns(2)
-        with col1:
-             st.write(f"**RFC:** {datos_cliente['rfc']} | **Régimen:** {datos_cliente['regimen']}")
-        with col2:
-             st.write(f"**Email:** {datos_cliente['email']} | **Teléfono:** {datos_cliente['telefono']}")
+        
+        # Tarjeta Principal del Cliente con Etiquetas CRM
+        col_titulo, col_etiquetas = st.columns([2, 1])
+        with col_titulo:
+            st.subheader(f"👤 {datos_cliente['nombre']}")
+            st.write(f"**RFC:** {rfc_cli} | **Régimen:** {datos_cliente['regimen']}")
+            st.write(f"**Email:** {datos_cliente['email']} | **Teléfono:** {datos_cliente['telefono']}")
+            
+        with col_etiquetas:
+            st.write("**🏷️ Etiquetas CRM:**")
+            etiquetas_actuales = str(datos_cliente.get('etiquetas', ''))
+            if pd.isna(etiquetas_actuales) or not etiquetas_actuales:
+                etiquetas_lista = []
+            else:
+                etiquetas_lista = [e.strip() for e in etiquetas_actuales.split(',') if e.strip()]
+                
+            # Mostrar etiquetas como badges usando HTML de Streamlit
+            if etiquetas_lista:
+                 html_tags = "".join([f'<span style="background-color: #f0f2f6; border-radius: 12px; padding: 4px 10px; margin: 2px; font-size: 12px; border: 1px solid #d1d5db; display: inline-block;">{tag}</span>' for tag in etiquetas_lista])
+                 st.markdown(html_tags, unsafe_allow_html=True)
+            else:
+                 st.caption("Sin etiquetas.")
+                 
+            with st.popover("Editar Etiquetas"):
+                # Opciones sugeridas y texto libre
+                opciones_tags = ["VIP", "Moroso", "Auditoría SAT", "Revisar Nómina", "Documentación Incompleta"]
+                tags_seleccionados = st.multiselect("Selecciona o escribe etiquetas:", options=opciones_tags + etiquetas_lista, default=etiquetas_lista)
+                if st.button("Actualizar Etiquetas"):
+                     nuevo_string = ",".join(tags_seleccionados)
+                     db.actualizar_etiquetas_cliente(cliente_id, nuevo_string)
+                     st.rerun()
+
+        # Pestañas para dividir la vista del Expediente
+        tab_graficas, tab_boveda, tab_archivo, tab_notas = st.tabs([
+             "📊 Finanzas y Gráficas", 
+             "🔐 Bóveda de Accesos", 
+             "📁 Archivo Digital",
+             "📝 Bitácora (Notas)"
+        ])
+        
+        with tab_graficas:
+             st.subheader("Análisis Financiero Histórico")
+             st.caption("Visualización de Ingresos vs Gastos a lo largo del año (Datos Demo).")
+             meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun']
+             ingresos_demo = [50000, 60000, 45000, 70000, 65000, 80000]
+             gastos_demo = [30000, 40000, 35000, 50000, 40000, 60000]
+             df_chart = pd.DataFrame({'Mes': meses, 'Ingresos': ingresos_demo, 'Gastos': gastos_demo})
+             fig = px.bar(df_chart, x='Mes', y=['Ingresos', 'Gastos'], barmode='group', color_discrete_map={'Ingresos': 'green', 'Gastos': 'red'})
+             st.plotly_chart(fig, use_container_width=True)
              
-        # Mock Gráfica Financiera
-        st.write("---")
-        st.subheader("📊 Análisis Financiero Histórico")
-        st.caption("Visualización de Ingresos vs Gastos a lo largo del año (Datos Demo). En el futuro, esto se alimentará del histórico de XMLs procesados.")
-        
-        # Generar datos demo para Plotly
-        meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun']
-        ingresos_demo = [50000, 60000, 45000, 70000, 65000, 80000]
-        gastos_demo = [30000, 40000, 35000, 50000, 40000, 60000]
-        df_chart = pd.DataFrame({'Mes': meses, 'Ingresos': ingresos_demo, 'Gastos': gastos_demo})
-        
-        fig = px.bar(df_chart, x='Mes', y=['Ingresos', 'Gastos'], barmode='group', color_discrete_map={'Ingresos': 'green', 'Gastos': 'red'})
-        st.plotly_chart(fig, use_container_width=True)
+        with tab_boveda:
+             st.subheader("Accesos y Contraseñas Seguras")
+             cred_df = db.obtener_credenciales(cliente_id)
+             with st.expander("Ver Accesos Guardados"):
+                  if cred_df.empty: st.info("No hay accesos guardados.")
+                  else:
+                      for _, row in cred_df.iterrows():
+                          with st.container(border=True):
+                              ccol1, ccol2, ccol3 = st.columns([2, 2, 1])
+                              with ccol1:
+                                  st.write(f"**{row['tipo_acceso']}**: {row['usuario']}")
+                              with ccol2:
+                                  if st.checkbox("Mostrar Contraseña", key=f"show_pw_{row['id']}"): st.code(row['contrasena'])
+                                  else: st.code("********")
+                                  if row['notas']: st.caption(f"Notas: {row['notas']}")
+                              with ccol3:
+                                  if st.button("Eliminar", key=f"del_cred_{row['id']}"):
+                                      db.eliminar_credencial(row['id'])
+                                      st.rerun()
+                                      
+             with st.expander("Agregar Nuevo Acceso"):
+                  with st.form("nueva_credencial"):
+                      tipo_acceso = st.selectbox("Tipo de Acceso", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Otro"])
+                      usuario = st.text_input("Usuario / RFC")
+                      contrasena = st.text_input("Contraseña", type="password")
+                      notas = st.text_input("Notas / Vencimiento")
+                      if st.form_submit_button("Guardar Acceso Seguramente") and tipo_acceso and contrasena:
+                           db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
+                           st.rerun()
+                           
+        with tab_archivo:
+             st.subheader("Gestor Documental Seguro")
+             st.write("Sube y administra los documentos oficiales importantes de este cliente.")
              
-        st.write("---")
-        st.subheader("🔐 Bóveda de Accesos y Contraseñas")
-        cred_df = db.obtener_credenciales(cliente_id)
-        
-        with st.expander("Ver Accesos Guardados"):
-             if cred_df.empty: st.info("No hay accesos guardados.")
+             # Crear directorio específico del cliente usando su RFC
+             dir_cliente = os.path.join(ARCHIVOS_DIR, rfc_cli)
+             os.makedirs(dir_cliente, exist_ok=True)
+             
+             col_upload, col_list = st.columns([1, 1])
+             with col_upload:
+                  st.write("**Subir Nuevo Documento**")
+                  tipo_doc = st.selectbox("Tipo de Documento", ["Acta Constitutiva", "INE Representante Legal", "Comprobante de Domicilio", "Acuse SAT", "Contrato", "Otro"])
+                  uploaded_doc = st.file_uploader("Seleccionar PDF", type=["pdf"], key="upload_doc")
+                  if st.button("Guardar en Archivo") and uploaded_doc:
+                       # Limpiar nombre de archivo seguro
+                       safe_name = f"{tipo_doc.replace(' ', '_')}_{datetime.today().strftime('%Y%m%d')}.pdf"
+                       file_path = os.path.join(dir_cliente, safe_name)
+                       with open(file_path, "wb") as f:
+                           f.write(uploaded_doc.getbuffer())
+                       st.success("Documento guardado localmente.")
+                       st.rerun()
+                       
+             with col_list:
+                  st.write("**Documentos en el Archivo Digital**")
+                  archivos = os.listdir(dir_cliente)
+                  if not archivos:
+                       st.info("La carpeta está vacía.")
+                  else:
+                       for f in archivos:
+                            f_path = os.path.join(dir_cliente, f)
+                            with st.container(border=True):
+                                col_f1, col_f2 = st.columns([3, 1])
+                                col_f1.write(f"📄 {f}")
+                                with open(f_path, "rb") as file_data:
+                                     col_f2.download_button("Descargar", data=file_data, file_name=f, mime="application/pdf", key=f"dl_{f}")
+                                     
+        with tab_notas:
+             st.subheader("Muro de Notas (Bitácora)")
+             
+             with st.form("nueva_nota"):
+                  nueva_nota = st.text_area("Escribe una nueva nota o recordatorio de interacción...")
+                  if st.form_submit_button("Publicar Nota") and nueva_nota:
+                       db.agregar_nota_crm(cliente_id, nueva_nota)
+                       st.rerun()
+                       
+             # Mostrar historial de notas
+             notas_df = db.obtener_notas_crm(cliente_id)
+             if notas_df.empty:
+                  st.caption("No hay notas registradas para este cliente.")
              else:
-                 for _, row in cred_df.iterrows():
-                     with st.container(border=True):
-                         ccol1, ccol2, ccol3 = st.columns([2, 2, 1])
-                         with ccol1:
-                             st.write(f"**{row['tipo_acceso']}**: {row['usuario']}")
-                         with ccol2:
-                             if st.checkbox("Mostrar Contraseña", key=f"show_pw_{row['id']}"): st.code(row['contrasena'])
-                             else: st.code("********")
-                         with ccol3:
-                             if st.button("Eliminar", key=f"del_cred_{row['id']}"):
-                                 db.eliminar_credencial(row['id'])
-                                 st.rerun()
-                                 
-        with st.expander("Agregar Nuevo Acceso"):
-             with st.form("nueva_credencial"):
-                 tipo_acceso = st.selectbox("Tipo de Acceso", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Otro"])
-                 usuario = st.text_input("Usuario / RFC")
-                 contrasena = st.text_input("Contraseña", type="password")
-                 notas = st.text_input("Notas / Vencimiento")
-                 if st.form_submit_button("Guardar Acceso Seguramente") and tipo_acceso and contrasena:
-                      db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
-                      st.rerun()
+                  for _, n_row in notas_df.iterrows():
+                       st.info(f"**{n_row['fecha']}** - {n_row['autor']}\n\n{n_row['contenido']}")
+                       # Botón pequeño de eliminar
+                       if st.button("Eliminar nota", key=f"del_nota_{n_row['id']}", type="tertiary"):
+                            db.eliminar_nota_crm(n_row['id'])
+                            st.rerun()
 
 elif seleccion == "Control de Honorarios":
     st.title("💼 Control de Honorarios del Despacho")
