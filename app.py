@@ -9,6 +9,7 @@ import report_generator as rg
 import traceback
 import plotly.express as px
 import io
+from st_aggrid import AgGrid, GridOptionsBuilder
 
 # Configuración de página
 st.set_page_config(page_title="Sistema Contable de Despacho", page_icon="📈", layout="wide")
@@ -381,7 +382,21 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
         if clientes_df.empty:
             st.info(f"No hay personas {tipo_persona.lower()}s registradas.")
         else:
-            st.dataframe(clientes_df, use_container_width=True, hide_index=True)
+            gb = GridOptionsBuilder.from_dataframe(clientes_df)
+            gb.configure_pagination(paginationAutoPageSize=False, paginationPageSize=15)
+            gb.configure_side_bar()
+            gb.configure_default_column(groupable=True, value=True, enableRowGroup=True, aggFunc='sum', editable=False)
+            gb.configure_selection('single')
+            grid_options = gb.build()
+            
+            AgGrid(
+                clientes_df,
+                gridOptions=grid_options,
+                enable_enterprise_modules=False,
+                allow_unsafe_jscode=True,
+                theme='streamlit'
+            )
+            
             st.write("---")
             with st.expander("Eliminar Cliente"):
                 opciones_eliminar = dict(zip(clientes_df['nombre'], clientes_df['id']))

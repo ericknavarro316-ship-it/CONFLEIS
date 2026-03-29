@@ -2,6 +2,20 @@ import sqlite3
 from datetime import datetime
 import pandas as pd
 import os
+import bcrypt
+
+def hash_password(password):
+    return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
+
+def check_password(password, hashed):
+    try:
+        if hashed is None or password is None: return False
+        if not hashed.startswith('$2'):
+            # Fallback temporal si la bd no ha sido totalmente migrada
+            return password == hashed
+        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    except:
+        return password == hashed
 
 DB_NAME = "despacho.db"
 
@@ -213,10 +227,12 @@ def init_db():
 def verificar_login_equipo(usuario, contrasena):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, nombre, rol FROM usuarios_despacho WHERE usuario = ? AND contrasena = ?", (usuario, contrasena))
+    cursor.execute("SELECT id, nombre, rol, contrasena FROM usuarios_despacho WHERE usuario = ?", (usuario,))
     resultado = cursor.fetchone()
     conn.close()
-    return resultado
+    if resultado and check_password(contrasena, resultado[3]):
+        return (resultado[0], resultado[1], resultado[2])
+    return None
 
 def obtener_usuarios_despacho():
     conn = sqlite3.connect(DB_NAME)
@@ -228,7 +244,8 @@ def agregar_usuario_despacho(nombre, usuario, contrasena, rol):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol) VALUES (?, ?, ?, ?)", (nombre, usuario, contrasena, rol))
+        hash_pwd = hash_password(contrasena)
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol) VALUES (?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol))
         conn.commit()
         return True, "Usuario agregado."
     except sqlite3.IntegrityError:
@@ -422,12 +439,16 @@ def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono, etiquet
             VALUES (?, ?, ?, ?, ?, ?, ?)
         ''', (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas))
         conn.commit()
+        obtener_clientes.clear()
         return True, "Cliente agregado exitosamente."
     except sqlite3.IntegrityError:
         return False, f"El RFC {rfc} ya existe en la base de datos."
     finally:
         conn.close()
 
+import streamlit as st
+
+@st.cache_data(ttl=300)
 def obtener_clientes(tipo_persona=None):
     conn = sqlite3.connect(DB_NAME)
     if tipo_persona:
@@ -443,6 +464,7 @@ def eliminar_cliente(cliente_id):
     cursor.execute("DELETE FROM clientes WHERE id = ?", (cliente_id,))
     conn.commit()
     conn.close()
+    obtener_clientes.clear()
 
 def actualizar_etiquetas_cliente(cliente_id, nuevas_etiquetas):
     conn = sqlite3.connect(DB_NAME)
@@ -450,21 +472,25 @@ def actualizar_etiquetas_cliente(cliente_id, nuevas_etiquetas):
     cursor.execute("UPDATE clientes SET etiquetas = ? WHERE id = ?", (nuevas_etiquetas, cliente_id))
     conn.commit()
     conn.close()
+    obtener_clientes.clear()
 
 def actualizar_password_portal(cliente_id, nuevo_password):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("UPDATE clientes SET password_portal = ? WHERE id = ?", (nuevo_password, cliente_id))
+    hash_pwd = hash_password(nuevo_password)
+    cursor.execute("UPDATE clientes SET password_portal = ? WHERE id = ?", (hash_pwd, cliente_id))
     conn.commit()
     conn.close()
     
 def verificar_login_cliente(rfc, password):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, nombre FROM clientes WHERE rfc = ? AND password_portal = ?", (rfc.upper(), password))
+    cursor.execute("SELECT id, nombre, password_portal FROM clientes WHERE rfc = ?", (rfc.upper(),))
     resultado = cursor.fetchone()
     conn.close()
-    return resultado # (id, nombre) o None
+    if resultado and check_password(password, resultado[2]):
+        return (resultado[0], resultado[1])
+    return None
 
 def registrar_documento_portal(cliente_id, nombre_archivo, ruta_archivo):
     conn = sqlite3.connect(DB_NAME)
