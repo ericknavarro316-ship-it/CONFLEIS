@@ -45,6 +45,19 @@ def init_db():
         )
     ''')
     
+    # Tabla de Credenciales (Bóveda Segura)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS credenciales (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            tipo_acceso TEXT NOT NULL,
+            usuario TEXT,
+            contrasena TEXT,
+            notas TEXT,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
     conn.commit()
     conn.close()
 
@@ -93,25 +106,34 @@ def agregar_obligacion(cliente_id, descripcion, fecha_limite, notas=""):
     conn.commit()
     conn.close()
 
-def obtener_obligaciones(tipo_persona=None):
+def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
+    
+    # Construcción de query dinámica basada en los filtros
+    query = '''
+        SELECT o.id, c.nombre as Cliente, o.descripcion, o.fecha_limite, o.estado, o.notas
+        FROM obligaciones o
+        JOIN clientes c ON o.cliente_id = c.id
+        WHERE 1=1
+    '''
+    params = []
+    
     if tipo_persona:
-         query = '''
-             SELECT o.id, c.nombre as Cliente, o.descripcion, o.fecha_limite, o.estado, o.notas
-             FROM obligaciones o
-             JOIN clientes c ON o.cliente_id = c.id
-             WHERE c.tipo_persona = ?
-             ORDER BY o.fecha_limite ASC
-         '''
-         df = pd.read_sql_query(query, conn, params=(tipo_persona,))
-    else:
-        query = '''
-            SELECT o.id, c.nombre as Cliente, o.descripcion, o.fecha_limite, o.estado, o.notas
-            FROM obligaciones o
-            JOIN clientes c ON o.cliente_id = c.id
-            ORDER BY o.fecha_limite ASC
-        '''
-        df = pd.read_sql_query(query, conn)
+        query += " AND c.tipo_persona = ?"
+        params.append(tipo_persona)
+        
+    if cliente_id:
+        query += " AND c.id = ?"
+        params.append(cliente_id)
+        
+    query += " ORDER BY o.fecha_limite ASC"
+    
+    df = pd.read_sql_query(query, conn, params=tuple(params))
+    
+    # Asegurar que fecha_limite sea datetime para cálculos de semáforo
+    if not df.empty:
+        df['fecha_limite'] = pd.to_datetime(df['fecha_limite']).dt.date
+        
     conn.close()
     return df
 
@@ -130,5 +152,30 @@ def eliminar_obligacion(obligacion_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM obligaciones WHERE id = ?", (obligacion_id,))
+    conn.commit()
+    conn.close()
+
+# --- Funciones para Credenciales (Bóveda Segura) ---
+
+def agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas=""):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO credenciales (cliente_id, tipo_acceso, usuario, contrasena, notas)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (cliente_id, tipo_acceso, usuario, contrasena, notas))
+    conn.commit()
+    conn.close()
+
+def obtener_credenciales(cliente_id):
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM credenciales WHERE cliente_id = ?", conn, params=(cliente_id,))
+    conn.close()
+    return df
+
+def eliminar_credencial(credencial_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM credenciales WHERE id = ?", (credencial_id,))
     conn.commit()
     conn.close()
