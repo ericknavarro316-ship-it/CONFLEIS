@@ -162,6 +162,36 @@ def init_db():
         )
     ''')
     
+    # Tabla Kanban (Tareas del Staff)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS kanban_tareas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            descripcion TEXT NOT NULL,
+            columna TEXT DEFAULT 'Por Revisar',
+            asignado_a INTEGER,
+            fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE,
+            FOREIGN KEY (asignado_a) REFERENCES usuarios_despacho (id) ON DELETE SET NULL
+        )
+    ''')
+    
+    # Tabla Líneas de Captura (Impuestos SAT)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS lineas_captura (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            mes TEXT NOT NULL,
+            anio INTEGER NOT NULL,
+            monto REAL NOT NULL,
+            fecha_vencimiento DATE NOT NULL,
+            archivo_ruta TEXT NOT NULL,
+            estado_envio TEXT DEFAULT 'Enviado',
+            fecha_envio DATETIME DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
     conn.commit()
     
     # Insert default config if none exists
@@ -302,6 +332,84 @@ def actualizar_configuracion(logo_ruta, c1, c2, c3):
     ''', (logo_ruta, c1, c2, c3))
     conn.commit()
     conn.close()
+
+# --- Funciones para Kanban y Líneas de Captura ---
+
+def crear_tarea_kanban(cliente_id, descripcion, asignado_a=None):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO kanban_tareas (cliente_id, descripcion, asignado_a) VALUES (?, ?, ?)", (cliente_id, descripcion, asignado_a))
+    conn.commit()
+    conn.close()
+
+def obtener_tareas_kanban(columna=None):
+    conn = sqlite3.connect(DB_NAME)
+    query = '''
+        SELECT k.id, c.nombre as Cliente, k.descripcion, k.columna, u.nombre as Asignado, k.fecha_creacion, c.id as cliente_id
+        FROM kanban_tareas k
+        JOIN clientes c ON k.cliente_id = c.id
+        LEFT JOIN usuarios_despacho u ON k.asignado_a = u.id
+    '''
+    if columna:
+        query += f" WHERE k.columna = '{columna}'"
+    query += " ORDER BY k.fecha_creacion ASC"
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+def mover_tarea_kanban(tarea_id, nueva_columna):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("UPDATE kanban_tareas SET columna = ? WHERE id = ?", (nueva_columna, tarea_id))
+    conn.commit()
+    conn.close()
+
+def eliminar_tarea_kanban(tarea_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM kanban_tareas WHERE id = ?", (tarea_id,))
+    conn.commit()
+    conn.close()
+
+def agregar_linea_captura(cliente_id, mes, anio, monto, fecha_vencimiento, archivo_ruta):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO lineas_captura (cliente_id, mes, anio, monto, fecha_vencimiento, archivo_ruta)
+        VALUES (?, ?, ?, ?, ?, ?)
+    ''', (cliente_id, mes, anio, monto, fecha_vencimiento, archivo_ruta))
+    conn.commit()
+    
+    # Registrar la notificación automática
+    mensaje = f"Línea de captura del mes {mes}/{anio} por un monto de ${float(monto):,.2f} con vencimiento el {fecha_vencimiento} ha sido generada y enviada a su correo/portal."
+    cursor.execute("INSERT INTO notificaciones (cliente_id, tipo, mensaje, estado) VALUES (?, 'Sistema Automático', ?, 'Enviado (Portal)')", (cliente_id, mensaje))
+    conn.commit()
+    conn.close()
+
+def obtener_lineas_captura(cliente_id=None):
+    conn = sqlite3.connect(DB_NAME)
+    query = '''
+        SELECT l.id, c.nombre as Cliente, l.mes, l.anio, l.monto, l.fecha_vencimiento, l.archivo_ruta, l.fecha_envio
+        FROM lineas_captura l
+        JOIN clientes c ON l.cliente_id = c.id
+    '''
+    params = []
+    if cliente_id:
+        query += " WHERE l.cliente_id = ?"
+        params.append(cliente_id)
+    query += " ORDER BY l.fecha_envio DESC"
+    
+    df = pd.read_sql_query(query, conn, params=tuple(params))
+    conn.close()
+    return df
+
+def eliminar_linea_captura(linea_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM lineas_captura WHERE id = ?", (linea_id,))
+    conn.commit()
+    conn.close()
+
 
 # --- Funciones para Clientes ---
 

@@ -151,7 +151,7 @@ elif st.session_state.logged_in_staff:
         "Expediente de Cliente",
         "🤖 Asistente Fiscal AI"
     ]
-    opciones = ["Dashboard", "Agenda y Citas", "Facturación (CFDI)"] + opciones
+    opciones = ["Dashboard", "Agenda y Citas", "Facturación (CFDI)", "Tablero Kanban (Staff)", "Envío de Líneas de Captura"] + opciones
     if staff['rol'] == 'Administrador':
         opciones = ["Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Configuración de Marca", "Notificaciones a Clientes"] + opciones + ["Control de Honorarios"]
 else:
@@ -245,48 +245,66 @@ if seleccion == "Mi Despacho (Finanzas)":
     
     # --- Tarjetas (KPIs) ---
     honorarios_df = db.obtener_honorarios()
-    mes_actual = datetime.now().strftime("%Y-%m")
     
     total_cobrado = 0.0
     total_pendiente = 0.0
+    tasa_morosidad = 0.0
+    mejor_cliente = "N/A"
+    
     if not honorarios_df.empty:
-        total_cobrado = honorarios_df[honorarios_df['Estado'] == 'Pagado']['Monto'].sum()
-        total_pendiente = honorarios_df[honorarios_df['Estado'] == 'Pendiente']['Monto'].sum()
-        
-    clientes_tot = len(obtener_clientes_permitidos())
-        
-    m1, m2, m3 = st.columns(3)
-    m1.metric("💰 Total Cobrado (Histórico)", f"${total_cobrado:,.2f}")
-    m2.metric("⏳ Pendiente por Cobrar", f"${total_pendiente:,.2f}")
-    m3.metric("👥 Clientes Activos", clientes_tot)
-    st.divider()
-    if honorarios_df.empty:
-        st.info("Aún no tienes honorarios registrados. Ve a 'Control de Honorarios' para empezar a facturar.")
-    else:
-        # Calcular KPIs
         total_facturado = honorarios_df['Monto'].sum()
         total_cobrado = honorarios_df[honorarios_df['Estado'] == 'Pagado']['Monto'].sum()
         total_pendiente = honorarios_df[honorarios_df['Estado'] == 'Pendiente']['Monto'].sum()
+        if total_facturado > 0:
+            tasa_morosidad = (total_pendiente / total_facturado) * 100
+        if total_cobrado > 0:
+            mejor_cliente = honorarios_df[honorarios_df['Estado'] == 'Pagado'].groupby('Cliente')['Monto'].sum().idxmax()
+            
+    clientes_tot = len(obtener_clientes_permitidos())
         
-        # Calcular tasa de morosidad
-        tasa_morosidad = (total_pendiente / total_facturado * 100) if total_facturado > 0 else 0
+    m1, m2, m3, m4 = st.columns(4)
+    m1.metric("💰 Total Cobrado", f"${total_cobrado:,.2f}")
+    m2.metric("⏳ Por Cobrar", f"${total_pendiente:,.2f}", delta=f"-{tasa_morosidad:.1f}% Morosidad", delta_color="inverse")
+    m3.metric("👥 Clientes", clientes_tot)
+    m4.metric("🏆 Top Cliente", mejor_cliente)
+    st.divider()
+    
+    if honorarios_df.empty:
+        st.info("Aún no tienes honorarios registrados. Ve a 'Control de Honorarios' para empezar a facturar.")
+    else:
+        # --- Gráficos Analíticos (Plotly) ---
+        c_graf1, c_graf2 = st.columns(2)
         
-        col1, col2, col3 = st.columns(3)
-        with col1:
-             st.metric("Total Cobrado (Histórico)", f"$ {total_cobrado:,.2f}")
-        with col2:
-             st.metric("Total por Cobrar (Pendiente)", f"$ {total_pendiente:,.2f}", delta=f"-{tasa_morosidad:.1f}% Morosidad", delta_color="inverse")
-        with col3:
-             # Mejor cliente (el que más ha pagado)
-             if total_cobrado > 0:
-                 df_pagados = honorarios_df[honorarios_df['Estado'] == 'Pagado']
-                 mejor_cliente = df_pagados.groupby('Cliente')['Monto'].sum().idxmax()
-                 st.metric("Top Cliente (Ingresos)", mejor_cliente)
-             else:
-                 st.metric("Top Cliente", "N/A")
+        with c_graf1:
+            st.subheader("Ingresos vs Cobranza Pendiente (Mensual)")
+            # Agrupar por Mes y Estado
+            cobranza_agrupada = honorarios_df.groupby(['Mes', 'Estado'])['Monto'].sum().reset_index()
+            # Ordenar meses
+            meses_orden = {"Enero": 1, "Febrero": 2, "Marzo": 3, "Abril": 4, "Mayo": 5, "Junio": 6, "Julio": 7, "Agosto": 8, "Septiembre": 9, "Octubre": 10, "Noviembre": 11, "Diciembre": 12}
+            cobranza_agrupada['OrdenMes'] = cobranza_agrupada['Mes'].map(meses_orden)
+            cobranza_agrupada = cobranza_agrupada.sort_values(by='OrdenMes')
+            
+            fig = px.bar(cobranza_agrupada, x="Mes", y="Monto", color="Estado", barmode="group",
+                         color_discrete_map={"Pagado": config['c1'], "Pendiente": config['c3']},
+                         labels={"Monto": "Ingresos ($)"})
+            st.plotly_chart(fig, use_container_width=True)
+
+        with c_graf2:
+            st.subheader("Estado de Obligaciones (Global)")
+            obligaciones_df = db.obtener_obligaciones()
+            if not obligaciones_df.empty:
+                conteo_obs = obligaciones_df['estado'].value_counts().reset_index()
+                conteo_obs.columns = ['Estado', 'Cantidad']
+                # Asignar colores según estado
+                color_map = {'Completada': '#198754', 'Pendiente': '#ffc107', 'Vencida': '#dc3545'}
+                fig2 = px.pie(conteo_obs, values="Cantidad", names="Estado", hole=0.4,
+                              color="Estado", color_discrete_map=color_map)
+                st.plotly_chart(fig2, use_container_width=True)
+            else:
+                st.info("No hay obligaciones registradas para generar el gráfico.")
                  
         st.write("---")
-        st.subheader("Ingresos por Mes")
+        st.subheader("Detalle de Honorarios por Mes")
         
         # Agrupar por mes y año para la gráfica
         df_grafica = honorarios_df.copy()
@@ -1199,4 +1217,119 @@ if seleccion == "Facturación (CFDI)":
                     st.download_button("Descargar XML", data=xml_bytes, file_name=f"Factura_{rfc_cliente}.xml", mime="application/xml")
     else:
         st.info("Debes registrar al menos un cliente.")
+
+
+if seleccion == "Tablero Kanban (Staff)":
+    st.title("📋 Tablero de Tareas (Kanban)")
+    st.write("Gestiona el flujo de trabajo del despacho y asigna tareas a tu equipo.")
+    
+    # Agregar Tarea
+    with st.expander("➕ Nueva Tarea"):
+        with st.form("form_nueva_tarea"):
+            clientes = obtener_clientes_permitidos()
+            if not clientes.empty:
+                c_sel = st.selectbox("Cliente", clientes['nombre'].tolist())
+                desc = st.text_input("Descripción de la Tarea")
+                
+                # Asignación solo si es Admin
+                asig_id = None
+                if st.session_state.logged_in_staff['rol'] == 'Administrador':
+                    usuarios = db.obtener_usuarios_despacho()
+                    if not usuarios.empty:
+                        u_sel = st.selectbox("Asignar a", usuarios['nombre'].tolist())
+                        asig_id = usuarios[usuarios['nombre'] == u_sel]['id'].values[0]
+                else:
+                    asig_id = st.session_state.logged_in_staff['id']
+                    
+                if st.form_submit_button("Crear Tarea"):
+                    c_id = clientes[clientes['nombre'] == c_sel]['id'].values[0]
+                    db.crear_tarea_kanban(c_id, desc, asig_id)
+                    st.success("Tarea creada.")
+                    st.rerun()
+            else:
+                st.info("Agrega clientes primero.")
+                
+    st.divider()
+    
+    columnas = ["Por Revisar", "En Proceso", "Lista para Envío", "Finalizada"]
+    cols = st.columns(len(columnas))
+    
+    for i, col_name in enumerate(columnas):
+        with cols[i]:
+            st.markdown(f"**{col_name}**")
+            df_tareas = db.obtener_tareas_kanban(col_name)
+            
+            # Filtro por Auxiliar
+            if st.session_state.logged_in_staff['rol'] == 'Auxiliar':
+                mi_nombre = st.session_state.logged_in_staff['nombre']
+                df_tareas = df_tareas[(df_tareas['Asignado'] == mi_nombre) | (df_tareas['Asignado'].isnull())]
+                
+            for _, row in df_tareas.iterrows():
+                with st.container(border=True):
+                    st.markdown(f"**{row['Cliente']}**")
+                    st.write(row['descripcion'])
+                    st.caption(f"👤 {row['Asignado'] if row['Asignado'] else 'Sin asignar'}")
+                    
+                    # Movimientos
+                    if i > 0:
+                        if st.button("⬅️", key=f"L_{row['id']}"):
+                            db.mover_tarea_kanban(row['id'], columnas[i-1])
+                            st.rerun()
+                    if i < len(columnas) - 1:
+                        if st.button("➡️", key=f"R_{row['id']}"):
+                            db.mover_tarea_kanban(row['id'], columnas[i+1])
+                            st.rerun()
+                    if st.button("🗑️", key=f"D_{row['id']}"):
+                        db.eliminar_tarea_kanban(row['id'])
+                        st.rerun()
+
+
+if seleccion == "Envío de Líneas de Captura":
+    st.title("💸 Envío de Líneas de Captura")
+    st.write("Sube el Acuse de Recibo del SAT y el sistema notificará automáticamente al cliente para su pago.")
+    
+    col_izq, col_der = st.columns([1, 2])
+    with col_izq:
+        clientes = obtener_clientes_permitidos()
+        if not clientes.empty:
+            with st.form("form_linea_captura"):
+                cliente_sel = st.selectbox("Cliente", clientes['nombre'].tolist())
+                mes = st.selectbox("Mes", ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"])
+                anio = st.number_input("Año", min_value=2020, max_value=2030, value=datetime.now().year)
+                monto = st.number_input("Monto a Pagar ($)", min_value=0.0, format="%.2f")
+                vencimiento = st.date_input("Fecha de Vencimiento", date.today() + pd.Timedelta(days=17))
+                archivo_pdf = st.file_uploader("Subir Línea de Captura (PDF)", type=["pdf"])
+                
+                if st.form_submit_button("Subir y Notificar al Cliente"):
+                    if archivo_pdf and monto >= 0:
+                        c_id = clientes[clientes['nombre'] == cliente_sel]['id'].values[0]
+                        nombre_archivo = f"Linea_{mes}_{anio}_{c_id}.pdf"
+                        ruta_archivo = os.path.join(ARCHIVOS_DIR, nombre_archivo)
+                        
+                        with open(ruta_archivo, "wb") as f:
+                            f.write(archivo_pdf.getbuffer())
+                            
+                        db.agregar_linea_captura(c_id, mes, anio, monto, vencimiento, ruta_archivo)
+                        db.registrar_documento_portal(c_id, nombre_archivo, ruta_archivo) # También lo ve en su portal
+                        
+                        st.success(f"Línea de captura enviada al portal del cliente y notificación por correo simulada a {clientes[clientes['nombre'] == cliente_sel]['email'].values[0]}")
+                        st.rerun()
+                    else:
+                        st.warning("Completa todos los campos y sube el PDF.")
+        else:
+            st.info("Registra clientes primero.")
+            
+    with col_der:
+        st.subheader("Historial de Envíos")
+        lineas_df = db.obtener_lineas_captura()
+        
+        # Filtro Staff
+        if st.session_state.logged_in_staff['rol'] == 'Auxiliar':
+            permitidos = clientes['nombre'].tolist()
+            lineas_df = lineas_df[lineas_df['Cliente'].isin(permitidos)]
+            
+        if not lineas_df.empty:
+            st.dataframe(lineas_df[['Cliente', 'mes', 'anio', 'monto', 'fecha_vencimiento', 'fecha_envio']], use_container_width=True, hide_index=True)
+        else:
+            st.write("Aún no se han enviado líneas de captura.")
 
