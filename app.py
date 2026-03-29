@@ -21,8 +21,57 @@ import diot_generator as diot
 import bank_reconciliation as br
 import polizas_generator as contpaqi
 import ai_assistant as ai
+import backend_tools as bt
+from PIL import Image
 
 import os
+
+# --- Configuración Visual y CSS ---
+config = db.obtener_configuracion()
+if not config:
+    config = {'logo': None, 'c1': '#000000', 'c2': '#FFCC00', 'c3': '#CC0000'}
+
+# Inyectar CSS
+st.markdown(f"""
+<style>
+    /* Colores Personalizados */
+    :root {{
+        --color-primario: {config['c1']};
+        --color-secundario: {config['c2']};
+        --color-terciario: {config['c3']};
+    }}
+    
+    .stButton>button {{
+        background-color: var(--color-secundario);
+        color: var(--color-primario);
+        border: none;
+        border-radius: 8px;
+        font-weight: bold;
+    }}
+    
+    .stButton>button:hover {{
+        background-color: var(--color-primario);
+        color: white;
+        border-color: var(--color-primario);
+    }}
+    
+    .stAlert {{
+        border-left: 5px solid var(--color-secundario);
+    }}
+    
+    /* Headers de sidebar */
+    [data-testid="stSidebarNav"]::before {{
+        content: "Mi Despacho App";
+        margin-left: 20px;
+        margin-top: 20px;
+        font-size: 30px;
+        position: relative;
+        top: 20px;
+        font-weight: bold;
+        color: var(--color-primario);
+    }}
+</style>
+""", unsafe_allow_html=True)
 
 # Asegurar que el directorio de archivos existe
 ARCHIVOS_DIR = "archivos_clientes"
@@ -72,6 +121,9 @@ if not st.session_state.logged_in_staff and not st.session_state.logged_in_clien
 
 
 # Menú lateral dinámico según quién está logueado
+if config and config.get('logo') and os.path.exists(config['logo']):
+    st.sidebar.image(config['logo'], use_container_width=True)
+
 st.sidebar.title("Navegación")
 
 if st.session_state.logged_in_client:
@@ -99,8 +151,9 @@ elif st.session_state.logged_in_staff:
         "Expediente de Cliente",
         "🤖 Asistente Fiscal AI"
     ]
+    opciones = ["Dashboard", "Agenda y Citas", "Facturación (CFDI)"] + opciones
     if staff['rol'] == 'Administrador':
-        opciones = ["Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Notificaciones a Clientes"] + opciones + ["Control de Honorarios"]
+        opciones = ["Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Configuración de Marca", "Notificaciones a Clientes"] + opciones + ["Control de Honorarios"]
 else:
     opciones = []
 
@@ -145,17 +198,68 @@ def estilo_semaforo(val):
 
 # Helpers para filtrado de clientes por rol
 def obtener_clientes_permitidos(tipo_persona=None):
-    df_todos = obtener_clientes_permitidos(tipo_persona)
+    df_todos = db.obtener_clientes(tipo_persona)
     if st.session_state.logged_in_staff and st.session_state.logged_in_staff['rol'] == 'Auxiliar':
         asignaciones = db.obtener_asignaciones(st.session_state.logged_in_staff['id'])
         return df_todos[df_todos['id'].isin(asignaciones)]
     return df_todos
 
+
+if seleccion == "Configuración de Marca":
+    st.title("🎨 Configuración de Marca y Colores")
+    st.write("Sube el logotipo de tu despacho. El sistema puede extraer los colores automáticamente o puedes elegirlos manualmente.")
+    
+    col1, col2 = st.columns(2)
+    with col1:
+        st.subheader("1. Logotipo")
+        logo_file = st.file_uploader("Sube tu logo (PNG/JPG)", type=['png', 'jpg', 'jpeg'])
+        ruta_logo = os.path.join(ARCHIVOS_DIR, "logo_despacho.png")
+        if logo_file:
+            with open(ruta_logo, "wb") as f:
+                f.write(logo_file.getbuffer())
+            st.success("Logo guardado exitosamente.")
+            
+        if os.path.exists(ruta_logo):
+            st.image(ruta_logo, width=200)
+            if st.button("Extraer colores del Logo automáticamente"):
+                c1, c2, c3 = bt.extraer_colores_de_imagen(ruta_logo)
+                db.actualizar_configuracion(ruta_logo, c1, c2, c3)
+                st.success("¡Colores extraídos y aplicados! Actualiza la página para ver los cambios.")
+                
+    with col2:
+        st.subheader("2. Paleta de Colores (Manual)")
+        conf = db.obtener_configuracion()
+        if not conf: conf = {'logo': '', 'c1': '#000000', 'c2': '#FFCC00', 'c3': '#CC0000'}
+        with st.form("color_form"):
+            color1 = st.color_picker("Color Primario (Títulos, Botones Hover)", conf.get('c1', '#000000'))
+            color2 = st.color_picker("Color Secundario (Botones principales, Alertas)", conf.get('c2', '#FFCC00'))
+            color3 = st.color_picker("Color Terciario (Énfasis)", conf.get('c3', '#CC0000'))
+            
+            if st.form_submit_button("Guardar Colores"):
+                db.actualizar_configuracion(conf.get('logo'), color1, color2, color3)
+                st.success("Colores guardados. Actualiza la página para ver los cambios.")
+
 if seleccion == "Mi Despacho (Finanzas)":
-    st.title("💼 Dashboard Financiero del Despacho")
+    st.title("💼 Dashboard Ejecutivo del Despacho")
     st.write("Resumen ejecutivo de la cobranza y rentabilidad de tu firma contable.")
     
+    # --- Tarjetas (KPIs) ---
     honorarios_df = db.obtener_honorarios()
+    mes_actual = datetime.now().strftime("%Y-%m")
+    
+    total_cobrado = 0.0
+    total_pendiente = 0.0
+    if not honorarios_df.empty:
+        total_cobrado = honorarios_df[honorarios_df['Estado'] == 'Pagado']['Monto'].sum()
+        total_pendiente = honorarios_df[honorarios_df['Estado'] == 'Pendiente']['Monto'].sum()
+        
+    clientes_tot = len(obtener_clientes_permitidos())
+        
+    m1, m2, m3 = st.columns(3)
+    m1.metric("💰 Total Cobrado (Histórico)", f"${total_cobrado:,.2f}")
+    m2.metric("⏳ Pendiente por Cobrar", f"${total_pendiente:,.2f}")
+    m3.metric("👥 Clientes Activos", clientes_tot)
+    st.divider()
     if honorarios_df.empty:
         st.info("Aún no tienes honorarios registrados. Ve a 'Control de Honorarios' para empezar a facturar.")
     else:
@@ -238,7 +342,19 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
     tipo_persona = "Física" if seleccion == "Personas Físicas" else "Moral"
     st.title(f"🏢 Módulo de Personas {tipo_persona}s")
     
-    tab1, tab2 = st.tabs(["Directorio y Obligaciones", "Agregar Cliente Nuevo"])
+    tab1, tab2, tab3 = st.tabs(["Directorio y Obligaciones", "Agregar Cliente Nuevo", "Carga Masiva (Excel)"])
+    
+    with tab3:
+        st.subheader("Subir Plantilla Excel")
+        st.write("Sube un archivo `.xlsx` con las columnas: `Nombre`, `RFC`, `TipoPersona` (Física/Moral), `Regimen` (Opcional), `Email`, `Telefono`.")
+        archivo_masivo = st.file_uploader("Selecciona tu Excel", type=["xlsx"], key="masivo_up")
+        if archivo_masivo:
+            if st.button("Procesar y Guardar", type="primary"):
+                res_num, res_msg = bt.procesar_carga_masiva_excel(archivo_masivo)
+                if res_num > 0:
+                    st.success(f"Se insertaron {res_num} clientes.")
+                if res_msg:
+                    st.warning(f"Errores encontrados:\n{res_msg}")
     
     with tab1:
         st.subheader(f"Lista de Personas {tipo_persona}s")
@@ -1009,3 +1125,78 @@ if seleccion == "Notificaciones a Clientes":
         st.dataframe(historial, hide_index=True)
     else:
         st.write("No hay notificaciones enviadas aún.")
+
+# --- Nuevos Módulos Fase 8 ---
+
+if seleccion == "Agenda y Citas":
+    st.title("📅 Agenda del Despacho")
+    st.write("Programa reuniones y entregas de documentos con tus clientes.")
+    
+    col1, col2 = st.columns([1, 2])
+    with col1:
+        st.subheader("Nueva Cita")
+        clientes = obtener_clientes_permitidos()
+        if not clientes.empty:
+            with st.form("form_cita"):
+                cliente_sel = st.selectbox("Cliente", clientes['nombre'].tolist())
+                titulo = st.text_input("Asunto / Título")
+                f_cita = st.date_input("Fecha")
+                h_cita = st.time_input("Hora")
+                notas = st.text_area("Notas")
+                
+                if st.form_submit_button("Agendar Cita"):
+                    if titulo:
+                        cliente_id = clientes[clientes['nombre'] == cliente_sel]['id'].values[0]
+                        dt_combinada = datetime.combine(f_cita, h_cita).strftime("%Y-%m-%d %H:%M:%S")
+                        db.agregar_cita(cliente_id, titulo, dt_combinada, notas)
+                        st.success("Cita agendada.")
+                        st.rerun()
+                    else:
+                        st.warning("El título es obligatorio.")
+        else:
+            st.info("Registra clientes primero.")
+            
+    with col2:
+        st.subheader("Próximas Citas")
+        df_citas = db.obtener_citas()
+        if not df_citas.empty:
+            # Filtrar si es Auxiliar
+            if st.session_state.logged_in_staff and st.session_state.logged_in_staff['rol'] == 'Auxiliar':
+                permitidos = clientes['nombre'].tolist()
+                df_citas = df_citas[df_citas['Cliente'].isin(permitidos)]
+                
+            for idx, row in df_citas.iterrows():
+                with st.expander(f"🗓️ {row['fecha_hora']} - {row['titulo']} ({row['Cliente']})"):
+                    st.write(f"**Notas:** {row['notas']}")
+                    if st.button("Eliminar Cita", key=f"del_cita_{row['id']}"):
+                        db.eliminar_cita(row['id'])
+                        st.rerun()
+        else:
+            st.write("No hay citas programadas.")
+
+
+if seleccion == "Facturación (CFDI)":
+    st.title("🧾 Emisor de Facturas CFDI (Simulador)")
+    st.write("Genera el PDF y XML de una factura para enviarla al cliente.")
+    
+    clientes = obtener_clientes_permitidos()
+    if not clientes.empty:
+        with st.form("factura_form"):
+            cliente_sel = st.selectbox("Receptor (Cliente)", clientes['nombre'].tolist())
+            concepto = st.text_input("Concepto (Ej. Honorarios Contables Mes de Abril)")
+            monto = st.number_input("Subtotal (Antes de IVA)", min_value=1.0, value=1500.0)
+            
+            if st.form_submit_button("Generar Factura"):
+                rfc_cliente = clientes[clientes['nombre'] == cliente_sel]['rfc'].values[0]
+                pdf_bytes, xml_bytes = bt.simular_timbrado_factura(cliente_sel, rfc_cliente, monto, concepto)
+                
+                st.success("¡Factura timbrada exitosamente!")
+                
+                col_d1, col_d2 = st.columns(2)
+                with col_d1:
+                    st.download_button("Descargar PDF", data=pdf_bytes, file_name=f"Factura_{rfc_cliente}.pdf", mime="application/pdf")
+                with col_d2:
+                    st.download_button("Descargar XML", data=xml_bytes, file_name=f"Factura_{rfc_cliente}.xml", mime="application/xml")
+    else:
+        st.info("Debes registrar al menos un cliente.")
+

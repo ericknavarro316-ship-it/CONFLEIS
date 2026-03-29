@@ -138,7 +138,37 @@ def init_db():
         )
     ''')
     
+    # Tabla de Citas/Agenda
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS citas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            titulo TEXT NOT NULL,
+            fecha_hora DATETIME NOT NULL,
+            notas TEXT,
+            estado TEXT DEFAULT 'Programada',
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Tabla de Configuración (Logo y Colores)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS configuracion (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            logo_ruta TEXT,
+            color_primario TEXT DEFAULT '#000000',
+            color_secundario TEXT DEFAULT '#FFCC00',
+            color_terciario TEXT DEFAULT '#CC0000'
+        )
+    ''')
+    
     conn.commit()
+    
+    # Insert default config if none exists
+    cursor.execute("SELECT COUNT(*) FROM configuracion")
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("INSERT INTO configuracion (id) VALUES (1)")
+        conn.commit()
     
     # Insert default admin if none exists
     cursor.execute("SELECT COUNT(*) FROM usuarios_despacho WHERE rol='Administrador'")
@@ -225,6 +255,53 @@ def obtener_notificaciones():
     df = pd.read_sql_query(query, conn)
     conn.close()
     return df
+
+# --- Funciones para Citas y Configuración ---
+
+def agregar_cita(cliente_id, titulo, fecha_hora, notas=""):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO citas (cliente_id, titulo, fecha_hora, notas) VALUES (?, ?, ?, ?)", (cliente_id, titulo, fecha_hora, notas))
+    conn.commit()
+    conn.close()
+
+def obtener_citas():
+    conn = sqlite3.connect(DB_NAME)
+    query = '''
+        SELECT a.id, c.nombre as Cliente, a.titulo, a.fecha_hora, a.notas, a.estado
+        FROM citas a
+        JOIN clientes c ON a.cliente_id = c.id
+        ORDER BY a.fecha_hora ASC
+    '''
+    df = pd.read_sql_query(query, conn)
+    conn.close()
+    return df
+
+def eliminar_cita(cita_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM citas WHERE id = ?", (cita_id,))
+    conn.commit()
+    conn.close()
+
+def obtener_configuracion():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT logo_ruta, color_primario, color_secundario, color_terciario FROM configuracion WHERE id = 1")
+    resultado = cursor.fetchone()
+    conn.close()
+    return {'logo': resultado[0], 'c1': resultado[1], 'c2': resultado[2], 'c3': resultado[3]} if resultado else None
+
+def actualizar_configuracion(logo_ruta, c1, c2, c3):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE configuracion 
+        SET logo_ruta = ?, color_primario = ?, color_secundario = ?, color_terciario = ? 
+        WHERE id = 1
+    ''', (logo_ruta, c1, c2, c3))
+    conn.commit()
+    conn.close()
 
 # --- Funciones para Clientes ---
 
