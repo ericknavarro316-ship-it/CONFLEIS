@@ -23,7 +23,7 @@ def init_db():
         )
     ''')
     
-    # Check if we need to migrate existing data (if we already had a DB without tipo_persona)
+    # Check if we need to migrate existing data (if we already had a DB sin tipo_persona)
     cursor.execute("PRAGMA table_info(clientes)")
     columns = [col[1] for col in cursor.fetchall()]
     if 'tipo_persona' not in columns:
@@ -53,6 +53,21 @@ def init_db():
             tipo_acceso TEXT NOT NULL,
             usuario TEXT,
             contrasena TEXT,
+            notas TEXT,
+            FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
+        )
+    ''')
+    
+    # Tabla de Honorarios (Control del Despacho)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS honorarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            cliente_id INTEGER,
+            mes TEXT NOT NULL,
+            anio INTEGER NOT NULL,
+            monto REAL NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'Pendiente',
+            fecha_pago DATE,
             notas TEXT,
             FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
         )
@@ -109,7 +124,7 @@ def agregar_obligacion(cliente_id, descripcion, fecha_limite, notas=""):
 def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
     
-    # Construcción de query dinámica basada en los filtros
+    # Construcción de query dinámica
     query = '''
         SELECT o.id, c.nombre as Cliente, o.descripcion, o.fecha_limite, o.estado, o.notas
         FROM obligaciones o
@@ -130,7 +145,6 @@ def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     
     df = pd.read_sql_query(query, conn, params=tuple(params))
     
-    # Asegurar que fecha_limite sea datetime para cálculos de semáforo
     if not df.empty:
         df['fecha_limite'] = pd.to_datetime(df['fecha_limite']).dt.date
         
@@ -177,5 +191,57 @@ def eliminar_credencial(credencial_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM credenciales WHERE id = ?", (credencial_id,))
+    conn.commit()
+    conn.close()
+
+# --- Funciones para Honorarios (Control del Despacho) ---
+
+def agregar_honorario(cliente_id, mes, anio, monto, notas=""):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        INSERT INTO honorarios (cliente_id, mes, anio, monto, notas)
+        VALUES (?, ?, ?, ?, ?)
+    ''', (cliente_id, mes, anio, monto, notas))
+    conn.commit()
+    conn.close()
+
+def obtener_honorarios(cliente_id=None):
+    conn = sqlite3.connect(DB_NAME)
+    query = '''
+        SELECT h.id, c.nombre as Cliente, h.mes as Mes, h.anio as Año, h.monto as Monto, 
+               h.estado as Estado, h.fecha_pago, h.notas
+        FROM honorarios h
+        JOIN clientes c ON h.cliente_id = c.id
+        WHERE 1=1
+    '''
+    params = []
+    if cliente_id:
+        query += " AND c.id = ?"
+        params.append(cliente_id)
+        
+    query += " ORDER BY h.anio DESC, h.mes DESC"
+    
+    df = pd.read_sql_query(query, conn, params=tuple(params))
+    conn.close()
+    return df
+
+def actualizar_estado_honorario(honorario_id, nuevo_estado):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    fecha_pago = datetime.today().strftime('%Y-%m-%d') if nuevo_estado == 'Pagado' else None
+    
+    cursor.execute('''
+        UPDATE honorarios
+        SET estado = ?, fecha_pago = ?
+        WHERE id = ?
+    ''', (nuevo_estado, fecha_pago, honorario_id))
+    conn.commit()
+    conn.close()
+
+def eliminar_honorario(honorario_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM honorarios WHERE id = ?", (honorario_id,))
     conn.commit()
     conn.close()
