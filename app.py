@@ -10,9 +10,15 @@ st.set_page_config(page_title="Sistema Contable de Despacho", page_icon="📈", 
 # Inicializar Base de Datos
 db.init_db()
 
+# Importar nuevos módulos
+import xml_processor as xp
+import tax_calculator as tc
+import report_generator as rg
+import traceback
+
 # Menú lateral
 st.sidebar.title("Navegación")
-opciones = ["Dashboard", "Personas Físicas", "Personas Morales", "Calendario General", "Expediente de Cliente"]
+opciones = ["Dashboard", "Personas Físicas", "Personas Morales", "Cálculo de Impuestos y XML", "Calendario General", "Expediente de Cliente"]
 seleccion = st.sidebar.radio("Ir a:", opciones)
 
 # ---------- Funciones Auxiliares para el Semáforo ----------
@@ -404,3 +410,124 @@ elif seleccion == "Expediente de Cliente":
                  ob_semaforo_cli[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
                  use_container_width=True, hide_index=True
              )
+
+elif seleccion == "Cálculo de Impuestos y XML":
+    st.title("🧮 Cálculo Automático de Impuestos (XML)")
+    st.write("Sube los XMLs (CFDI) de Ingresos y Gastos del mes para calcular automáticamente el IVA y el ISR, y generar el reporte del cliente.")
+    
+    clientes_df = db.obtener_clientes()
+    if clientes_df.empty:
+        st.warning("No hay clientes registrados en el sistema.")
+    else:
+        # Selector de cliente
+        clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
+        opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
+        cliente_seleccionado = st.selectbox("Selecciona un Cliente:", list(opciones_cli.keys()))
+        
+        cliente_id = opciones_cli[cliente_seleccionado]
+        datos_cliente = clientes_df[clientes_df['id'] == cliente_id].iloc[0]
+        rfc_cliente = datos_cliente['rfc']
+        tipo_persona = datos_cliente['tipo_persona']
+        regimen_cliente = datos_cliente['regimen']
+        
+        st.write(f"**Régimen:** {regimen_cliente} | **Tipo:** {tipo_persona}")
+        
+        st.write("---")
+        
+        # Subir archivos XML
+        st.subheader("1. Subir Facturas (XML)")
+        archivos_xml = st.file_uploader(
+             "Sube todos los XMLs del mes (Ventas y Compras)", 
+             type=["xml"], 
+             accept_multiple_files=True
+        )
+        
+        if archivos_xml:
+             if st.button("Procesar y Calcular"):
+                  with st.spinner("Procesando XMLs..."):
+                       # 1. Procesar XMLs
+                       try:
+                           df_facturas = xp.procesar_lote_xmls(archivos_xml, rfc_cliente)
+                           
+                           if df_facturas.empty:
+                                st.error("No se encontraron facturas válidas o relacionadas a este RFC.")
+                           else:
+                                st.success(f"Se procesaron {len(df_facturas)} facturas correctamente.")
+                                
+                                # 2. Mostrar detalle de facturas
+                                with st.expander("Ver Detalle de Facturas (Solo lectura)"):
+                                     st.dataframe(df_facturas)
+                                
+                                # 3. Resumir y Calcular Impuestos
+                                st.write("---")
+                                st.subheader("2. Resumen Financiero Mensual (Base Flujo / PUE)")
+                                
+                                resumen_mensual = xp.resumir_facturas(df_facturas)
+                                if not resumen_mensual:
+                                     st.warning("No se encontraron facturas PUE (Pagadas/Cobradas) para calcular impuestos base flujo.")
+                                else:
+                                     resultados = tc.calcular_impuestos(resumen_mensual, regimen_cliente, tipo_persona)
+                                     
+                                     col1, col2 = st.columns(2)
+                                     with col1:
+                                          st.metric("Total Ingresos (Cobrados)", f"$ {resultados['Ingresos_Totales']:,.2f}")
+                                          st.metric("Utilidad / Base Gravable", f"$ {resultados['Utilidad_Fiscal_Base']:,.2f}")
+                                          
+                                          st.write("**Desglose de IVA**")
+                                          st.write(f"IVA Cobrado: $ {resultados['IVA_Cobrado']:,.2f}")
+                                          st.write(f"IVA Pagado: $ {resultados['IVA_Pagado']:,.2f}")
+                                          st.write(f"IVA Retenido: $ {resultados['IVA_Retenido']:,.2f}")
+                                          
+                                     with col2:
+                                          st.metric("Total Gastos (Pagados)", f"$ {resultados['Gastos_Totales']:,.2f}")
+                                          st.write("**Desglose de ISR**")
+                                          st.write(f"ISR Determinado: $ {resultados['ISR_Determinado']:,.2f} (Tasa: {resultados['Tasa_ISR_Aplicada']})")
+                                          st.write(f"ISR Retenido: $ {resultados['ISR_Retenido']:,.2f}")
+                                          
+                                     st.write("---")
+                                     st.subheader("3. Impuestos a Pagar / a Favor")
+                                     
+                                     c1, c2, c3 = st.columns(3)
+                                     
+                                     with c1:
+                                          if resultados['IVA_A_Favor'] > 0:
+                                               st.success(f"IVA a Favor: $ {resultados['IVA_A_Favor']:,.2f}")
+                                          else:
+                                               st.error(f"IVA a Pagar: $ {resultados['IVA_A_Pagar']:,.2f}")
+                                               
+                                     with c2:
+                                          if resultados['ISR_A_Favor'] > 0:
+                                               st.success(f"ISR a Favor: $ {resultados['ISR_A_Favor']:,.2f}")
+                                          else:
+                                               st.error(f"ISR a Pagar: $ {resultados['ISR_A_Pagar']:,.2f}")
+                                               
+                                     with c3:
+                                          st.metric(
+                                              "TOTAL IMPUESTOS A PAGAR", 
+                                              f"$ {resultados['Total_Impuestos_A_Pagar']:,.2f}",
+                                              delta="A pagar al SAT",
+                                              delta_color="inverse"
+                                          )
+                                          
+                                     # 4. Generar Reporte PDF
+                                     st.write("---")
+                                     st.subheader("4. Generar Reporte para el Cliente")
+                                     
+                                     # Extraer un mes y año representativo de la primera factura
+                                     try:
+                                          mes_str = df_facturas.iloc[0]["Mes_Anio"]
+                                     except:
+                                          mes_str = "Mes Actual"
+                                          
+                                     pdf_bytes = rg.generar_pdf(datos_cliente, mes_str, resultados, df_facturas)
+                                     
+                                     st.download_button(
+                                          label="📄 Descargar Reporte en PDF",
+                                          data=pdf_bytes,
+                                          file_name=f"Reporte_Impuestos_{rfc_cliente}_{mes_str}.pdf",
+                                          mime="application/pdf",
+                                          type="primary"
+                                     )
+                       except Exception as e:
+                           st.error(f"Ocurrió un error al procesar: {e}")
+                           st.code(traceback.format_exc())
