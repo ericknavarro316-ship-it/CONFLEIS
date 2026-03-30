@@ -1162,7 +1162,20 @@ elif seleccion == "Gestión de Equipo (Admin)":
         with col_list:
             st.subheader("Directorio del Staff")
             if not df_users.empty:
-                st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True, hide_index=True)
+                event = st.dataframe(
+                    df_users[['nombre', 'usuario', 'rol']], 
+                    use_container_width=True, 
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row"
+                )
+                
+                if event and len(event.selection.rows) > 0:
+                    row_idx = event.selection.rows[0]
+                    usuario_seleccionado = df_users.iloc[row_idx]['usuario']
+                    if st.session_state.get('user_sel_val') != usuario_seleccionado:
+                        st.session_state.user_sel_val = usuario_seleccionado
+                        st.rerun()
             else:
                 st.info("No hay usuarios registrados.")
                 
@@ -1240,7 +1253,20 @@ elif seleccion == "Gestión de Equipo (Admin)":
         with col_rlist:
             st.subheader("Puestos Actuales")
             if not df_roles.empty:
-                st.dataframe(df_roles[['nombre_rol', 'nivel_jerarquia']], use_container_width=True, hide_index=True)
+                event = st.dataframe(
+                    df_roles[['nombre_rol', 'nivel_jerarquia']], 
+                    use_container_width=True, 
+                    hide_index=True,
+                    on_select="rerun",
+                    selection_mode="single-row"
+                )
+                
+                if event and len(event.selection.rows) > 0:
+                    row_idx = event.selection.rows[0]
+                    rol_seleccionado = df_roles.iloc[row_idx]['nombre_rol']
+                    if st.session_state.get('rol_sel_val') != rol_seleccionado:
+                        st.session_state.rol_sel_val = rol_seleccionado
+                        st.rerun()
             
     with tab_assign:
         st.subheader("Asignar Clientes a Empleados (Segregación de Datos)")
