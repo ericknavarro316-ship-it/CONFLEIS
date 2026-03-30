@@ -1181,9 +1181,17 @@ elif seleccion == "Gestión de Equipo (Admin)":
                 jer_r = st.number_input("Nivel Jerárquico (1=Jefe, 5=Operativo)", min_value=1, max_value=10, value=int(def_rj))
                 
                 st.write("**Permisos de Acceso:**")
+                
+                # Checkbox Seleccionar Todos
+                seleccionar_todos = st.checkbox("☑️ **Seleccionar Todos los Módulos**", value=False)
+                st.write("---")
+                
                 permisos_seleccionados = []
                 for mod in todos_modulos:
-                    if st.checkbox(mod, value=(mod in def_rperm)):
+                    # Si "seleccionar todos" esta activo, forzamos value=True
+                    # Si no, usamos el valor por defecto que viene de la BD para este rol
+                    val_check = True if seleccionar_todos else (mod in def_rperm)
+                    if st.checkbox(mod, value=val_check):
                         permisos_seleccionados.append(mod)
                 
                 if st.form_submit_button("Guardar Puesto"):
