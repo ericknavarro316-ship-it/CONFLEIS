@@ -11,8 +11,9 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # DB
-*.db
+#*.db # Permitir la BD inicial en el repo si se desea, o descomentarlo para que cada entorno la cree
 *.sqlite3
 
 # Logs
 *.log
+archivos_clientes/
