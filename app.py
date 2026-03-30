@@ -1127,6 +1127,10 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         r_id = df_roles[df_roles['nombre_rol'] == rol_sel]['id'].values[0]
                         s_id = next((s_id for s_name, s_id in opciones_super if s_name == sup_sel), None) if not df_users.empty else None
                         
+                        # Convertir tipos de numpy a tipos nativos de python si es necesario
+                        r_id = int(r_id)
+                        s_id = int(s_id) if s_id is not None else None
+
                         if is_edit:
                             ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None)
                         else:
@@ -1134,7 +1138,11 @@ elif seleccion == "Gestión de Equipo (Admin)":
                                 ok, msg = False, "Contraseña es requerida para nuevo usuario."
                             else:
                                 ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id)
-                        if ok: st.success(msg); st.rerun()
+                        if ok: 
+                            st.success(msg)
+                            import time
+                            time.sleep(1.5)
+                            st.rerun()
                         else: st.error(msg)
                     else:
                         st.warning("Completa todos los campos básicos.")
@@ -1183,9 +1191,14 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         if is_r_edit:
                             db.actualizar_rol(int(r_row['id']), nom_r, jer_r, permisos_seleccionados)
                             st.success("Rol actualizado.")
+                            import time
+                            time.sleep(1.5)
                         else:
                             ok, m = db.agregar_rol(nom_r, jer_r, permisos_seleccionados)
-                            if ok: st.success(m)
+                            if ok: 
+                                st.success(m)
+                                import time
+                                time.sleep(1.5)
                             else: st.error(m)
                         st.rerun()
                     else:
@@ -1513,141 +1526,6 @@ elif seleccion == "🤖 Asistente Fiscal AI":
             st.markdown(respuesta_ai)
         st.session_state.chat_history.append({"role": "assistant", "content": respuesta_ai})
 
-elif seleccion == "Control de Honorarios":
-    st.title("💼 Control de Honorarios del Despacho")
-    st.write("Administra la cobranza de igualas mensuales o servicios extraordinarios de tus clientes.")
-    
-    clientes_df = obtener_clientes_permitidos()
-    if clientes_df.empty:
-        st.warning("Primero registra clientes en el Directorio.")
-    else:
-        tab1, tab2 = st.tabs(["Panel de Cobranza", "Registrar Nuevo Cargo"])
-        
-        with tab1:
-            st.subheader("Estado de Cuenta de Clientes")
-            honorarios_df = db.obtener_honorarios()
-            
-            if honorarios_df.empty:
-                st.info("No hay honorarios registrados.")
-            else:
-                total_pendiente = honorarios_df[honorarios_df['Estado'] == 'Pendiente']['Monto'].sum()
-                st.metric("Total por Cobrar (Deuda a favor del despacho)", f"$ {total_pendiente:,.2f}")
-                
-                filtro = st.selectbox("Filtrar", ["Todos", "Pendiente", "Pagado"])
-                df_mostrar = honorarios_df if filtro == "Todos" else honorarios_df[honorarios_df['Estado'] == filtro]
-                
-                def color_cobranza(val):
-                    color = 'green' if val == 'Pagado' else 'red'
-                    return f'color: {color}'
-                    
-                st.dataframe(df_mostrar.style.applymap(color_cobranza, subset=['Estado']), use_container_width=True, hide_index=True)
-                
-                st.write("---")
-                col1, col2 = st.columns(2)
-                with col1:
-                    op_act = dict(zip(df_mostrar['Cliente'] + " (" + df_mostrar['Mes'] + ") - $" + df_mostrar['Monto'].astype(str), df_mostrar['id']))
-                    if op_act:
-                        hon_act = st.selectbox("Marcar como:", list(op_act.keys()))
-                        n_est = st.selectbox("Estado:", ["Pagado", "Pendiente"])
-                        if st.button("Actualizar Pago"):
-                            db.actualizar_estado_honorario(op_act[hon_act], n_est)
-                            st.rerun()
-                with col2:
-                    if op_act:
-                        hon_elim = st.selectbox("Eliminar registro:", list(op_act.keys()), key="del_hon")
-                        if st.button("Eliminar"):
-                            db.eliminar_honorario(op_act[hon_elim])
-                            st.rerun()
-
-        with tab2:
-            st.subheader("Cargar Honorarios a Cliente")
-            with st.form("nuevo_honorario"):
-                clientes_df['nombre_display'] = clientes_df['nombre']
-                dict_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
-                cli_sel = st.selectbox("Cliente", list(dict_cli.keys()))
-                
-                meses_lista = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
-                mes = st.selectbox("Mes de la Iguala", meses_lista, index=datetime.today().month - 1)
-                anio = st.number_input("Año", value=datetime.today().year, step=1)
-                monto = st.number_input("Monto a Cobrar ($)", min_value=0.0, step=100.0)
-                notas = st.text_input("Concepto (Ej. Iguala Mensual, Declaración Anual)")
-                
-                if st.form_submit_button("Registrar Cargo"):
-                    db.agregar_honorario(dict_cli[cli_sel], mes, anio, monto, notas)
-                    st.success("Cargo registrado exitosamente.")
-                    st.rerun()
-if seleccion == "Gestión de Equipo (Admin)":
-    st.header("Gestión de Equipo y Asignaciones")
-    tab_users, tab_assign = st.tabs(["Usuarios del Despacho", "Asignación de Clientes"])
-    
-    with tab_users:
-        st.subheader("Registrar Nuevo Usuario")
-        with st.form("form_nuevo_usuario"):
-            nombre_u = st.text_input("Nombre Completo")
-            usuario_u = st.text_input("Usuario (Login)")
-            pass_u = st.text_input("Contraseña", type="password")
-            rol_u = st.selectbox("Rol", ["Administrador", "Auxiliar"])
-            if st.form_submit_button("Guardar Usuario"):
-                if nombre_u and usuario_u and pass_u:
-                    ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, rol_u)
-                    if ok: st.success(msg)
-                    else: st.error(msg)
-                else:
-                    st.warning("Completa todos los campos.")
-                    
-        st.subheader("Usuarios Registrados")
-        df_users = db.obtener_usuarios_despacho()
-        if not df_users.empty:
-            for idx, row in df_users.iterrows():
-                col1, col2, col3, col4 = st.columns([3,2,2,1])
-                col1.write(f"**{row['nombre']}**")
-                col2.write(row['usuario'])
-                col3.write(row['rol'])
-                if row['usuario'] != 'admin':
-                    if col4.button("Eliminar", key=f"del_user_{row['id']}"):
-                        db.eliminar_usuario_despacho(row['id'])
-                        st.rerun()
-        else:
-            st.info("No hay usuarios registrados.")
-            
-    with tab_assign:
-        st.subheader("Asignar Clientes a Auxiliares")
-        df_auxiliares = df_users[df_users['rol'] == 'Auxiliar']
-        if not df_auxiliares.empty:
-            aux_sel_nombre = st.selectbox("Selecciona un Auxiliar", df_auxiliares['nombre'].tolist())
-            aux_id = df_auxiliares[df_auxiliares['nombre'] == aux_sel_nombre]['id'].values[0]
-            
-            df_todos_clientes = db.obtener_clientes()
-            clientes_asignados = db.obtener_asignaciones(aux_id)
-            
-            st.write(f"Clientes asignados a **{aux_sel_nombre}**:")
-            for idx, row in df_todos_clientes.iterrows():
-                asignado = row['id'] in clientes_asignados
-                nuevo_estado = st.checkbox(f"{row['nombre']} ({row['rfc']})", value=asignado, key=f"assign_{aux_id}_{row['id']}")
-                if nuevo_estado != asignado:
-                    if nuevo_estado:
-                        db.asignar_cliente_a_usuario(aux_id, row['id'])
-                    else:
-                        db.desasignar_cliente_de_usuario(aux_id, row['id'])
-                    st.rerun()
-        else:
-            st.info("No hay auxiliares registrados.")
-
-if seleccion == "Descarga Masiva SAT (Simulador)":
-    st.title("⬇️ Descarga Masiva del SAT (Simulador)")
-    st.write("Conexión al Web Service del SAT para descargar facturas automáticamente.")
-    
-    col1, col2 = st.columns(2)
-    with col1:
-        clientes = db.obtener_clientes()
-        if not clientes.empty:
-            cliente_rfc = st.selectbox("Seleccionar Cliente (RFC)", clientes['rfc'].tolist())
-            fecha_inicio = st.date_input("Fecha Inicio", date(datetime.now().year, datetime.now().month, 1))
-            fecha_fin = st.date_input("Fecha Fin", date.today())
-            
-            if st.button("Sincronizar con Web Service del SAT", type="primary"):
-                import time
-                progress_text = "Conectando al SAT y descargando XMLs..."
                 my_bar = st.progress(0, text=progress_text)
                 for percent_complete in range(100):
                     time.sleep(0.02)
