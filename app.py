@@ -1084,16 +1084,25 @@ elif seleccion == "Gestión de Equipo (Admin)":
             
             # Lista de usuarios existentes
             opciones_user = ["--- Crear Nuevo ---"] + df_users['usuario'].tolist() if not df_users.empty else ["--- Crear Nuevo ---"]
-            if 'form_user_accion' not in st.session_state:
-                st.session_state.form_user_accion = "--- Crear Nuevo ---"
-            user_sel = st.selectbox("Seleccionar Acción", opciones_user, key="form_user_accion")
+            
+            if 'user_sel_val' not in st.session_state:
+                st.session_state.user_sel_val = "--- Crear Nuevo ---"
+                
+            idx_user = 0
+            if st.session_state.user_sel_val in opciones_user:
+                idx_user = opciones_user.index(st.session_state.user_sel_val)
+                
+            def on_user_change():
+                st.session_state.user_sel_val = st.session_state.user_sel_widget
+
+            user_sel = st.selectbox("Seleccionar Acción", opciones_user, index=idx_user, key="user_sel_widget", on_change=on_user_change)
             
             # Valores por defecto
             def_nom, def_usr, def_rol_id, def_rep = "", "", 2, None
-            is_edit = user_sel != "--- Crear Nuevo ---"
+            is_edit = st.session_state.user_sel_val != "--- Crear Nuevo ---"
             
             if is_edit:
-                u_row = df_users[df_users['usuario'] == user_sel].iloc[0]
+                u_row = df_users[df_users['usuario'] == st.session_state.user_sel_val].iloc[0]
                 def_nom, def_usr = u_row['nombre'], u_row['usuario']
                 def_rol_id = int(u_row['rol_id'])
                 def_rep = u_row['reporta_a_id']
@@ -1114,7 +1123,7 @@ elif seleccion == "Gestión de Equipo (Admin)":
             
             if not df_users.empty:
                 # Supervisor no puede ser uno mismo
-                opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != user_sel]
+                opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != st.session_state.user_sel_val]
                 idx_sup = 0
                 for i, (_, s_id) in enumerate(opciones_super):
                     if s_id == def_rep:
@@ -1144,7 +1153,7 @@ elif seleccion == "Gestión de Equipo (Admin)":
                             st.success(msg)
                             import time
                             time.sleep(1.5)
-                            st.session_state.form_user_accion = "--- Crear Nuevo ---"
+                            st.session_state.user_sel_val = "--- Crear Nuevo ---"
                             st.rerun()
                         else: st.error(msg)
                     else:
@@ -1170,14 +1179,23 @@ elif seleccion == "Gestión de Equipo (Admin)":
             st.subheader("Crear/Editar Puesto")
             
             opciones_r = ["--- Crear Nuevo ---"] + df_roles['nombre_rol'].tolist() if not df_roles.empty else ["--- Crear Nuevo ---"]
-            if 'form_rol_accion' not in st.session_state:
-                st.session_state.form_rol_accion = "--- Crear Nuevo ---"
-            r_sel = st.selectbox("Acción", opciones_r, key="form_rol_accion")
-            is_r_edit = r_sel != "--- Crear Nuevo ---"
+            
+            if 'rol_sel_val' not in st.session_state:
+                st.session_state.rol_sel_val = "--- Crear Nuevo ---"
+                
+            idx_rol_sel = 0
+            if st.session_state.rol_sel_val in opciones_r:
+                idx_rol_sel = opciones_r.index(st.session_state.rol_sel_val)
+                
+            def on_rol_change():
+                st.session_state.rol_sel_val = st.session_state.rol_sel_widget
+
+            r_sel = st.selectbox("Acción", opciones_r, index=idx_rol_sel, key="rol_sel_widget", on_change=on_rol_change)
+            is_r_edit = st.session_state.rol_sel_val != "--- Crear Nuevo ---"
             
             def_rn, def_rj, def_rperm = "", 5, []
             if is_r_edit:
-                r_row = df_roles[df_roles['nombre_rol'] == r_sel].iloc[0]
+                r_row = df_roles[df_roles['nombre_rol'] == st.session_state.rol_sel_val].iloc[0]
                 def_rn, def_rj = r_row['nombre_rol'], r_row['nivel_jerarquia']
                 import json
                 def_rperm = json.loads(r_row['permisos_json'])
@@ -1206,14 +1224,14 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         st.success("Rol actualizado.")
                         import time
                         time.sleep(1.5)
-                        st.session_state.form_rol_accion = "--- Crear Nuevo ---"
+                        st.session_state.rol_sel_val = "--- Crear Nuevo ---"
                     else:
                         ok, m = db.agregar_rol(nom_r, jer_r, permisos_seleccionados)
                         if ok: 
                             st.success(m)
                             import time
                             time.sleep(1.5)
-                            st.session_state.form_rol_accion = "--- Crear Nuevo ---"
+                            st.session_state.rol_sel_val = "--- Crear Nuevo ---"
                         else: st.error(m)
                     st.rerun()
                 else:
