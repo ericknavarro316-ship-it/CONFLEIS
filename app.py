@@ -1534,19 +1534,6 @@ elif seleccion == "🤖 Asistente Fiscal AI":
             st.markdown(respuesta_ai)
         st.session_state.chat_history.append({"role": "assistant", "content": respuesta_ai})
 
-                my_bar = st.progress(0, text=progress_text)
-                for percent_complete in range(100):
-                    time.sleep(0.02)
-                    my_bar.progress(percent_complete + 1, text=progress_text)
-                
-                cliente_id = clientes[clientes['rfc'] == cliente_rfc]['id'].values[0]
-                db.agregar_nota_crm(cliente_id, f"Descarga masiva de XMLs del {fecha_inicio} al {fecha_fin} completada (Simulador).")
-                st.success("¡Descarga de 15 XMLs completada exitosamente!")
-                st.balloons()
-        else:
-            st.info("No hay clientes registrados.")
-
-if seleccion == "Notificaciones a Clientes":
     st.title("📲 Panel de Notificaciones (WhatsApp / Email)")
     st.write("Envía recordatorios masivos a tus clientes sobre pagos o estados de cuenta.")
     
