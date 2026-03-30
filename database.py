@@ -117,16 +117,39 @@ def init_db():
         )
     ''')
     
-    # Tabla de Usuarios del Despacho (Socio, Auxiliar)
+    # Tabla de Roles y Permisos (Puestos del Despacho)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS roles_despacho (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre_rol TEXT NOT NULL UNIQUE,
+            nivel_jerarquia INTEGER DEFAULT 5,
+            permisos_json TEXT NOT NULL DEFAULT '[]'
+        )
+    ''')
+
+    # Tabla de Usuarios del Despacho (Socio, Auxiliar, Gerente)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS usuarios_despacho (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
             usuario TEXT NOT NULL UNIQUE,
             contrasena TEXT NOT NULL,
-            rol TEXT NOT NULL DEFAULT 'Auxiliar'
+            rol_id INTEGER NOT NULL DEFAULT 2,
+            reporta_a_id INTEGER,
+            FOREIGN KEY (rol_id) REFERENCES roles_despacho (id) ON DELETE RESTRICT,
+            FOREIGN KEY (reporta_a_id) REFERENCES usuarios_despacho (id) ON DELETE SET NULL
         )
     ''')
+
+    # --- MIGRACIÓN (Si ya existía la tabla anterior con `rol` en texto) ---
+    cursor.execute("PRAGMA table_info(usuarios_despacho)")
+    columns_users = [col[1] for col in cursor.fetchall()]
+    if 'rol_id' not in columns_users:
+        try: cursor.execute("ALTER TABLE usuarios_despacho ADD COLUMN rol_id INTEGER NOT NULL DEFAULT 2")
+        except: pass
+    if 'reporta_a_id' not in columns_users:
+        try: cursor.execute("ALTER TABLE usuarios_despacho ADD COLUMN reporta_a_id INTEGER")
+        except: pass
     
     # Tabla de Asignaciones (Auxiliar -> Cliente)
     cursor.execute('''
@@ -214,12 +237,66 @@ def init_db():
         cursor.execute("INSERT INTO configuracion (id) VALUES (1)")
         conn.commit()
     
-    # Insert default admin if none exists
-    cursor.execute("SELECT COUNT(*) FROM usuarios_despacho WHERE rol='Administrador'")
+    # Insertar Roles por defecto si no existen
+    import json
+    cursor.execute("SELECT COUNT(*) FROM roles_despacho")
     if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol) VALUES ('Administrador General', 'admin', 'admin', 'Administrador')")
+        todos_los_modulos = json.dumps([
+            "Dashboard", "Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Configuración de Marca", "Personas Físicas", 
+            "Personas Morales", "Cálculo de Impuestos y XML", "Conciliación Bancaria y DIOT", "Descarga Masiva SAT (Simulador)",
+            "Exportación a CONTPAQi", "Calendario General", "Expediente de Cliente", "Control de Honorarios", 
+            "🤖 Asistente Fiscal AI", "Notificaciones a Clientes", "Agenda y Citas", "Facturación (CFDI)", 
+            "Tablero Kanban (Staff)", "Envío de Líneas de Captura"
+        ])
+        modulos_basicos = json.dumps([
+            "Dashboard", "Personas Físicas", "Personas Morales", "Cálculo de Impuestos y XML", 
+            "Conciliación Bancaria y DIOT", "Descarga Masiva SAT (Simulador)", "Calendario General", 
+            "🤖 Asistente Fiscal AI", "Agenda y Citas", "Facturación (CFDI)", "Tablero Kanban (Staff)", "Envío de Líneas de Captura"
+        ])
+        cursor.execute("INSERT INTO roles_despacho (id, nombre_rol, nivel_jerarquia, permisos_json) VALUES (1, 'Administrador', 1, ?)", (todos_los_modulos,))
+        cursor.execute("INSERT INTO roles_despacho (id, nombre_rol, nivel_jerarquia, permisos_json) VALUES (2, 'Auxiliar', 3, ?)", (modulos_basicos,))
         conn.commit()
 
+    # Actualizar admin existente a nuevo sistema de roles o crear uno nuevo
+    cursor.execute("SELECT COUNT(*) FROM usuarios_despacho WHERE usuario='admin'")
+    if cursor.fetchone()[0] == 0:
+        hash_pwd = hash_password("admin")
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol_id) VALUES ('Administrador General', 'admin', ?, 1)", (hash_pwd,))
+        conn.commit()
+    else:
+        cursor.execute("UPDATE usuarios_despacho SET rol_id = 1 WHERE usuario='admin'")
+        conn.commit()
+
+    conn.close()
+
+# --- Funciones para Roles de Acceso (RBAC) ---
+def agregar_rol(nombre_rol, nivel_jerarquia, modulos_permitidos):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    import json
+    permisos_json = json.dumps(modulos_permitidos)
+    try:
+        cursor.execute("INSERT INTO roles_despacho (nombre_rol, nivel_jerarquia, permisos_json) VALUES (?, ?, ?)", (nombre_rol, nivel_jerarquia, permisos_json))
+        conn.commit()
+        return True, "Puesto/Rol creado exitosamente."
+    except sqlite3.IntegrityError:
+        return False, "El nombre de este puesto ya existe."
+    finally:
+        conn.close()
+
+def obtener_roles():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM roles_despacho ORDER BY nivel_jerarquia ASC", conn)
+    conn.close()
+    return df
+
+def actualizar_rol(rol_id, nombre_rol, nivel_jerarquia, modulos_permitidos):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    import json
+    permisos_json = json.dumps(modulos_permitidos)
+    cursor.execute("UPDATE roles_despacho SET nombre_rol = ?, nivel_jerarquia = ?, permisos_json = ? WHERE id = ?", (nombre_rol, nivel_jerarquia, permisos_json, rol_id))
+    conn.commit()
     conn.close()
 
 # --- Funciones para Usuarios y Asignaciones ---
@@ -227,29 +304,60 @@ def init_db():
 def verificar_login_equipo(usuario, contrasena):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, nombre, rol, contrasena FROM usuarios_despacho WHERE usuario = ?", (usuario,))
+    query = '''
+        SELECT u.id, u.nombre, r.nombre_rol, u.contrasena, r.permisos_json
+        FROM usuarios_despacho u
+        JOIN roles_despacho r ON u.rol_id = r.id
+        WHERE u.usuario = ?
+    '''
+    cursor.execute(query, (usuario,))
     resultado = cursor.fetchone()
     conn.close()
+    import json
     if resultado and check_password(contrasena, resultado[3]):
-        return (resultado[0], resultado[1], resultado[2])
+        permisos = json.loads(resultado[4]) if resultado[4] else []
+        return (resultado[0], resultado[1], resultado[2], permisos)
     return None
 
 def obtener_usuarios_despacho():
     conn = sqlite3.connect(DB_NAME)
-    df = pd.read_sql_query("SELECT id, nombre, usuario, rol FROM usuarios_despacho", conn)
+    query = '''
+        SELECT u.id, u.nombre, u.usuario, r.nombre_rol as rol, u.rol_id, u.reporta_a_id
+        FROM usuarios_despacho u
+        JOIN roles_despacho r ON u.rol_id = r.id
+    '''
+    df = pd.read_sql_query(query, conn)
     conn.close()
     return df
 
-def agregar_usuario_despacho(nombre, usuario, contrasena, rol):
+def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         hash_pwd = hash_password(contrasena)
-        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol) VALUES (?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol))
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol_id, reporta_a_id) VALUES (?, ?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol_id, reporta_a_id))
         conn.commit()
         return True, "Usuario agregado."
     except sqlite3.IntegrityError:
         return False, "El nombre de usuario ya existe."
+    finally:
+        conn.close()
+
+def actualizar_usuario_despacho(user_id, nombre, usuario, rol_id, reporta_a_id=None, nueva_contrasena=None):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        if nueva_contrasena:
+            hash_pwd = hash_password(nueva_contrasena)
+            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, contrasena=? WHERE id=?", 
+                           (nombre, usuario, rol_id, reporta_a_id, hash_pwd, user_id))
+        else:
+            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=? WHERE id=?", 
+                           (nombre, usuario, rol_id, reporta_a_id, user_id))
+        conn.commit()
+        return True, "Usuario actualizado exitosamente."
+    except sqlite3.IntegrityError:
+        return False, "El nombre de usuario ya existe en otro registro."
     finally:
         conn.close()
 

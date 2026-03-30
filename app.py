@@ -100,7 +100,12 @@ if not st.session_state.logged_in_staff and not st.session_state.logged_in_clien
         if st.button("Ingresar (Staff)"):
             staff_data = db.verificar_login_equipo(staff_user, staff_pass)
             if staff_data:
-                st.session_state.logged_in_staff = {'id': staff_data[0], 'nombre': staff_data[1], 'rol': staff_data[2]}
+                st.session_state.logged_in_staff = {
+                    'id': staff_data[0], 
+                    'nombre': staff_data[1], 
+                    'rol': staff_data[2], 
+                    'permisos': staff_data[3]
+                }
                 st.success(f"Bienvenido {staff_data[1]} ({staff_data[2]})")
                 st.rerun()
             else:
@@ -140,8 +145,19 @@ elif st.session_state.logged_in_staff:
         st.session_state.logged_in_staff = None
         st.rerun()
         
-    opciones = [
+    # Usar permisos extraídos de la BD en JSON
+    permisos = staff.get('permisos', [])
+    
+    # Todos los módulos posibles
+    todos_modulos = [
+        "Mi Despacho (Finanzas)",
+        "Gestión de Equipo (Admin)",
+        "Configuración de Marca",
         "Dashboard",
+        "Agenda y Citas",
+        "Facturación (CFDI)",
+        "Tablero Kanban (Staff)",
+        "Envío de Líneas de Captura",
         "Personas Físicas", 
         "Personas Morales", 
         "Cálculo de Impuestos y XML",
@@ -150,11 +166,18 @@ elif st.session_state.logged_in_staff:
         "Exportación a CONTPAQi",
         "Calendario General",
         "Expediente de Cliente",
+        "Control de Honorarios",
+        "Notificaciones a Clientes",
         "🤖 Asistente Fiscal AI"
     ]
-    opciones = ["Dashboard", "Agenda y Citas", "Facturación (CFDI)", "Tablero Kanban (Staff)", "Envío de Líneas de Captura"] + opciones
-    if staff['rol'] == 'Administrador':
-        opciones = ["Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Configuración de Marca", "Notificaciones a Clientes"] + opciones + ["Control de Honorarios"]
+    
+    # Filtrar solo los que están en los permisos
+    opciones = [m for m in todos_modulos if m in permisos]
+    
+    # Para evitar romper si los permisos fallan (fallback de seguridad)
+    if not opciones:
+        opciones = ["Dashboard", "Personas Físicas"]
+
 else:
     opciones = []
 
@@ -706,6 +729,513 @@ elif seleccion == "Conciliación Bancaria y DIOT":
                             st.dataframe(xmls_huerfanos[['Fecha', 'Serie_Folio', 'Tipo', 'Emisor_Nombre', 'Total']], use_container_width=True)
 
 elif seleccion == "Descarga Masiva SAT (Simulador)":
+    st.title("☁️ Conexión y Descarga Masiva del SAT")
+    st.write("Módulo avanzado para conectar directamente con los servidores del SAT y descargar todos los XML (Emitidos y Recibidos) y Metadata.")
+    
+    st.info("""
+    **Aviso Técnico y Legal:**
+    La descarga masiva directa desde el portal del SAT (sin captcha) requiere conectarse al **Web Service Oficial del SAT**. 
+    Para establecer este canal seguro, es **estrictamente obligatorio** firmar las peticiones electrónicas utilizando la e.firma (Archivo .CER, Archivo .KEY y Contraseña Privada) del contribuyente.
+    
+    Por razones de seguridad y cumplimiento normativo (Compliance), este entorno demo no almacena ni procesa archivos .KEY reales. 
+    A continuación se muestra la interfaz que utilizarás cuando despliegues este sistema en tu servidor privado seguro.
+    """)
+    
+    clientes_df = obtener_clientes_permitidos()
+    if clientes_df.empty:
+        st.warning("No hay clientes registrados.")
+    else:
+        clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
+        opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
+        cliente_seleccionado = st.selectbox("Selecciona un Cliente para conectar al SAT:", list(opciones_cli.keys()))
+        
+        with st.form("descarga_sat"):
+            st.subheader("Parámetros de Descarga (Web Service)")
+            col1, col2 = st.columns(2)
+            with col1:
+                 fecha_inicio = st.date_input("Fecha Inicial")
+                 tipo_descarga = st.selectbox("Tipo de Comprobantes", ["Emitidos", "Recibidos", "Ambos"])
+            with col2:
+                 fecha_fin = st.date_input("Fecha Final")
+                 tipo_archivo = st.selectbox("Formato de Descarga", ["XML", "Metadata (TXT)"])
+                 
+            st.write("---")
+            st.subheader("Firma de la Solicitud (e.firma obligatoria)")
+            cer_file = st.file_uploader("Certificado (.CER)", type=["cer"])
+            key_file = st.file_uploader("Llave Privada (.KEY)", type=["key"])
+            password = st.text_input("Contraseña de la Llave Privada", type="password")
+            
+            if st.form_submit_button("Conectar y Solicitar Descarga (Simulación)"):
+                if not cer_file or not key_file or not password:
+                    st.error("Error: Para establecer la conexión SOAP con el Web Service del SAT necesitas subir la e.firma completa.")
+                else:
+                    with st.spinner("Autenticando con el SAT... Generando Token... Enviando Solicitud..."):
+                        import time
+                        time.sleep(3) # Simular conexión
+                        st.success("¡Solicitud Aceptada por el SAT! (Simulación)")
+                        st.info(f"El SAT ha recibido tu petición para descargar los XMLs {tipo_descarga} del {fecha_inicio} al {fecha_fin}. El paquete de archivos estará listo para descargar en unos minutos según la disponibilidad de sus servidores.")
+
+elif seleccion == "Expediente de Cliente":
+    st.title("📂 Historial, CRM y Archivo del Cliente")
+    
+    clientes_df = obtener_clientes_permitidos()
+    if clientes_df.empty:
+        st.warning("No hay clientes registrados en el sistema.")
+    else:
+        clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
+        opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
+        cliente_seleccionado = st.selectbox("Buscar Cliente:", list(opciones_cli.keys()))
+        
+        cliente_id = opciones_cli[cliente_seleccionado]
+        datos_cliente = clientes_df[clientes_df['id'] == cliente_id].iloc[0]
+        rfc_cli = datos_cliente['rfc']
+        
+        st.write("---")
+        
+        # Tarjeta Principal del Cliente con Etiquetas CRM
+        col_titulo, col_etiquetas = st.columns([2, 1])
+        with col_titulo:
+            st.subheader(f"👤 {datos_cliente['nombre']}")
+            st.write(f"**RFC:** {rfc_cli} | **Régimen:** {datos_cliente['regimen']}")
+            st.write(f"**Email:** {datos_cliente['email']} | **Teléfono:** {datos_cliente['telefono']}")
+            
+        with col_etiquetas:
+            st.write("**🏷️ Etiquetas CRM:**")
+            etiquetas_actuales = str(datos_cliente.get('etiquetas', ''))
+            if pd.isna(etiquetas_actuales) or not etiquetas_actuales:
+                etiquetas_lista = []
+            else:
+                etiquetas_lista = [e.strip() for e in etiquetas_actuales.split(',') if e.strip()]
+                
+            # Mostrar etiquetas como badges usando HTML de Streamlit
+            if etiquetas_lista:
+                 html_tags = "".join([f'<span style="background-color: #f0f2f6; border-radius: 12px; padding: 4px 10px; margin: 2px; font-size: 12px; border: 1px solid #d1d5db; display: inline-block;">{tag}</span>' for tag in etiquetas_lista])
+                 st.markdown(html_tags, unsafe_allow_html=True)
+            else:
+                 st.caption("Sin etiquetas.")
+                 
+            with st.popover("Editar Etiquetas"):
+                # Opciones sugeridas y texto libre
+                opciones_tags = ["VIP", "Moroso", "Auditoría SAT", "Revisar Nómina", "Documentación Incompleta"]
+                tags_seleccionados = st.multiselect("Selecciona o escribe etiquetas:", options=opciones_tags + etiquetas_lista, default=etiquetas_lista)
+                if st.button("Actualizar Etiquetas"):
+                     nuevo_string = ",".join(tags_seleccionados)
+                     db.actualizar_etiquetas_cliente(cliente_id, nuevo_string)
+                     st.rerun()
+
+        # Pestañas para dividir la vista del Expediente
+        tab_graficas, tab_boveda, tab_archivo, tab_notas = st.tabs([
+             "📊 Finanzas y Gráficas", 
+             "🔐 Bóveda de Accesos", 
+             "📁 Archivo Digital",
+             "📝 Bitácora (Notas)"
+        ])
+        
+        with tab_graficas:
+             st.subheader("Análisis Financiero Histórico")
+             st.caption("Visualización de Ingresos vs Gastos a lo largo del año (Datos Demo).")
+             meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun']
+             ingresos_demo = [50000, 60000, 45000, 70000, 65000, 80000]
+             gastos_demo = [30000, 40000, 35000, 50000, 40000, 60000]
+             df_chart = pd.DataFrame({'Mes': meses, 'Ingresos': ingresos_demo, 'Gastos': gastos_demo})
+             fig = px.bar(df_chart, x='Mes', y=['Ingresos', 'Gastos'], barmode='group', color_discrete_map={'Ingresos': 'green', 'Gastos': 'red'})
+             st.plotly_chart(fig, use_container_width=True)
+             
+        with tab_boveda:
+             st.subheader("Accesos y Contraseñas Seguras")
+             cred_df = db.obtener_credenciales(cliente_id)
+             with st.expander("Ver Accesos Guardados"):
+                  if cred_df.empty: st.info("No hay accesos guardados.")
+                  else:
+                      for _, row in cred_df.iterrows():
+                          with st.container(border=True):
+                              ccol1, ccol2, ccol3 = st.columns([2, 2, 1])
+                              with ccol1:
+                                  st.write(f"**{row['tipo_acceso']}**: {row['usuario']}")
+                              with ccol2:
+                                  if st.checkbox("Mostrar Contraseña", key=f"show_pw_{row['id']}"): st.code(row['contrasena'])
+                                  else: st.code("********")
+                                  if row['notas']: st.caption(f"Notas: {row['notas']}")
+                              with ccol3:
+                                  if st.button("Eliminar", key=f"del_cred_{row['id']}"):
+                                      db.eliminar_credencial(row['id'])
+                                      st.rerun()
+                                      
+             with st.expander("Agregar Nuevo Acceso"):
+                  with st.form("nueva_credencial"):
+                      tipo_acceso = st.selectbox("Tipo de Acceso", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Otro"])
+                      usuario = st.text_input("Usuario / RFC")
+                      contrasena = st.text_input("Contraseña", type="password")
+                      notas = st.text_input("Notas / Vencimiento")
+                      if st.form_submit_button("Guardar Acceso Seguramente") and tipo_acceso and contrasena:
+                           db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
+                           st.rerun()
+                           
+        with tab_archivo:
+             st.subheader("Gestor Documental Seguro")
+             st.write("Sube y administra los documentos oficiales importantes de este cliente.")
+             
+             # Crear directorio específico del cliente usando su RFC
+             dir_cliente = os.path.join(ARCHIVOS_DIR, rfc_cli)
+             os.makedirs(dir_cliente, exist_ok=True)
+             
+             col_upload, col_list = st.columns([1, 1])
+             with col_upload:
+                  st.write("**Subir Nuevo Documento**")
+                  tipo_doc = st.selectbox("Tipo de Documento", ["Acta Constitutiva", "INE Representante Legal", "Comprobante de Domicilio", "Acuse SAT", "Contrato", "Otro"])
+                  uploaded_doc = st.file_uploader("Seleccionar PDF", type=["pdf"], key="upload_doc")
+                  if st.button("Guardar en Archivo") and uploaded_doc:
+                       # Limpiar nombre de archivo seguro
+                       safe_name = f"{tipo_doc.replace(' ', '_')}_{datetime.today().strftime('%Y%m%d')}.pdf"
+                       file_path = os.path.join(dir_cliente, safe_name)
+                       with open(file_path, "wb") as f:
+                           f.write(uploaded_doc.getbuffer())
+                       st.success("Documento guardado localmente.")
+                       st.rerun()
+                       
+             with col_list:
+                  st.write("**Documentos en el Archivo Digital**")
+                  archivos = os.listdir(dir_cliente)
+                  if not archivos:
+                       st.info("La carpeta está vacía.")
+                  else:
+                       for f in archivos:
+                            f_path = os.path.join(dir_cliente, f)
+                            with st.container(border=True):
+                                col_f1, col_f2 = st.columns([3, 1])
+                                col_f1.write(f"📄 {f}")
+                                with open(f_path, "rb") as file_data:
+                                     col_f2.download_button("Descargar", data=file_data, file_name=f, mime="application/pdf", key=f"dl_{f}")
+                                     
+        with tab_notas:
+             st.subheader("Muro de Notas (Bitácora)")
+             
+             with st.form("nueva_nota"):
+                  nueva_nota = st.text_area("Escribe una nueva nota o recordatorio de interacción...")
+                  if st.form_submit_button("Publicar Nota") and nueva_nota:
+                       db.agregar_nota_crm(cliente_id, nueva_nota)
+                       st.rerun()
+                       
+             # Mostrar historial de notas
+             notas_df = db.obtener_notas_crm(cliente_id)
+             if notas_df.empty:
+                  st.caption("No hay notas registradas para este cliente.")
+             else:
+                  for _, n_row in notas_df.iterrows():
+                       st.info(f"**{n_row['fecha']}** - {n_row['autor']}\n\n{n_row['contenido']}")
+                       # Botón pequeño de eliminar
+                       if st.button("Eliminar nota", key=f"del_nota_{n_row['id']}", type="tertiary"):
+                            db.eliminar_nota_crm(n_row['id'])
+                            st.rerun()
+
+elif seleccion == "Portal del Cliente (Login)":
+    st.title("🔐 Acceso para Clientes")
+    st.write("Ingresa tu RFC y la contraseña proporcionada por tu contador para acceder a tu información fiscal.")
+    
+    with st.form("login_form"):
+        rfc_login = st.text_input("RFC")
+        pwd_login = st.text_input("Contraseña", type="password")
+        if st.form_submit_button("Ingresar"):
+            if not rfc_login or not pwd_login:
+                st.error("Por favor llena ambos campos.")
+            else:
+                cliente_data = db.verificar_login_cliente(rfc_login, pwd_login)
+                if cliente_data:
+                    st.session_state.logged_in_client = {'id': cliente_data[0], 'nombre': cliente_data[1], 'rfc': rfc_login.upper()}
+                    st.rerun()
+                else:
+                    st.error("Credenciales incorrectas. Verifica tu RFC y contraseña.")
+
+elif seleccion == "Mi Portal (Cliente)":
+    cliente_info = st.session_state.logged_in_client
+    st.title(f"🏢 Bienvenido, {cliente_info['nombre']}")
+    st.write(f"**RFC:** {cliente_info['rfc']}")
+    
+    tab1, tab2 = st.tabs(["Mis Obligaciones y Alertas", "Enviar Documentos al Contador"])
+    
+    with tab1:
+        st.subheader("Semáforo Fiscal")
+        st.write("Estas son tus obligaciones fiscales vigentes y su estado actual:")
+        mis_obligaciones = db.obtener_obligaciones(cliente_id=cliente_info['id'])
+        if mis_obligaciones.empty:
+             st.info("No tienes obligaciones pendientes en este momento.")
+        else:
+             ob_semaforo = calcular_semaforo(mis_obligaciones)
+             cols_to_show = ['semaforo', 'descripcion', 'fecha_limite', 'estado']
+             st.dataframe(
+                 ob_semaforo[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                 use_container_width=True, hide_index=True
+             )
+             
+    with tab2:
+        st.subheader("Buzón Seguro")
+        st.write("Sube tus estados de cuenta, facturas o comprobantes. El despacho los recibirá inmediatamente en tu expediente.")
+        
+        doc_upload = st.file_uploader("Seleccionar Archivo (PDF, Excel, Imágenes)", key="client_upload")
+        if st.button("Enviar al Despacho") and doc_upload:
+             dir_cliente = os.path.join(ARCHIVOS_DIR, cliente_info['rfc'])
+             os.makedirs(dir_cliente, exist_ok=True)
+             safe_name = f"PORTAL_{datetime.today().strftime('%Y%m%d_%H%M%S')}_{doc_upload.name.replace(' ', '_')}"
+             file_path = os.path.join(dir_cliente, safe_name)
+             
+             with open(file_path, "wb") as f:
+                 f.write(doc_upload.getbuffer())
+                 
+             db.registrar_documento_portal(cliente_info['id'], doc_upload.name, file_path)
+             st.success("¡Documento enviado exitosamente! Tu contador ha sido notificado.")
+
+elif seleccion == "🤖 Asistente Fiscal AI":
+    st.title("🤖 Asistente Fiscal con Inteligencia Artificial")
+    st.write("Pregúntame sobre topes de deducciones, viáticos, recargos o tasas de impuestos (RESICO).")
+    
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+            
+    if prompt := st.chat_input("Escribe tu duda fiscal aquí... (Ej. '¿Cuál es el tope para deducir un automóvil?')"):
+        # Agregar mensaje de usuario
+        st.session_state.chat_history.append({"role": "user", "content": prompt})
+        with st.chat_message("user"):
+            st.markdown(prompt)
+            
+        # Generar respuesta de AI
+        respuesta_ai = ai.obtener_respuesta_fiscal(prompt)
+        
+        # Mostrar y guardar respuesta
+        with st.chat_message("assistant"):
+            st.markdown(respuesta_ai)
+        st.session_state.chat_history.append({"role": "assistant", "content": respuesta_ai})
+
+elif seleccion == "Control de Honorarios":
+    st.title("💼 Control de Honorarios del Despacho")
+    st.write("Administra la cobranza de igualas mensuales o servicios extraordinarios de tus clientes.")
+    
+    clientes_df = obtener_clientes_permitidos()
+    if clientes_df.empty:
+        st.warning("Primero registra clientes en el Directorio.")
+    else:
+        tab1, tab2 = st.tabs(["Panel de Cobranza", "Registrar Nuevo Cargo"])
+        
+        with tab1:
+            st.subheader("Estado de Cuenta de Clientes")
+            honorarios_df = db.obtener_honorarios()
+            
+            if honorarios_df.empty:
+                st.info("No hay honorarios registrados.")
+            else:
+                total_pendiente = honorarios_df[honorarios_df['Estado'] == 'Pendiente']['Monto'].sum()
+                st.metric("Total por Cobrar (Deuda a favor del despacho)", f"$ {total_pendiente:,.2f}")
+                
+                filtro = st.selectbox("Filtrar", ["Todos", "Pendiente", "Pagado"])
+                df_mostrar = honorarios_df if filtro == "Todos" else honorarios_df[honorarios_df['Estado'] == filtro]
+                
+                def color_cobranza(val):
+                    color = 'green' if val == 'Pagado' else 'red'
+                    return f'color: {color}'
+                    
+                st.dataframe(df_mostrar.style.applymap(color_cobranza, subset=['Estado']), use_container_width=True, hide_index=True)
+                
+                st.write("---")
+                col1, col2 = st.columns(2)
+                with col1:
+                    op_act = dict(zip(df_mostrar['Cliente'] + " (" + df_mostrar['Mes'] + ") - $" + df_mostrar['Monto'].astype(str), df_mostrar['id']))
+                    if op_act:
+                        hon_act = st.selectbox("Marcar como:", list(op_act.keys()))
+                        n_est = st.selectbox("Estado:", ["Pagado", "Pendiente"])
+                        if st.button("Actualizar Pago"):
+                            db.actualizar_estado_honorario(op_act[hon_act], n_est)
+                            st.rerun()
+                with col2:
+                    if op_act:
+                        hon_elim = st.selectbox("Eliminar registro:", list(op_act.keys()), key="del_hon")
+                        if st.button("Eliminar"):
+                            db.eliminar_honorario(op_act[hon_elim])
+                            st.rerun()
+
+        with tab2:
+            st.subheader("Cargar Honorarios a Cliente")
+            with st.form("nuevo_honorario"):
+                clientes_df['nombre_display'] = clientes_df['nombre']
+                dict_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
+                cli_sel = st.selectbox("Cliente", list(dict_cli.keys()))
+                
+                meses_lista = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
+                mes = st.selectbox("Mes de la Iguala", meses_lista, index=datetime.today().month - 1)
+                anio = st.number_input("Año", value=datetime.today().year, step=1)
+                monto = st.number_input("Monto a Cobrar ($)", min_value=0.0, step=100.0)
+                notas = st.text_input("Concepto (Ej. Iguala Mensual, Declaración Anual)")
+                
+                if st.form_submit_button("Registrar Cargo"):
+                    db.agregar_honorario(dict_cli[cli_sel], mes, anio, monto, notas)
+                    st.success("Cargo registrado exitosamente.")
+                    st.rerun()
+
+elif seleccion == "Gestión de Equipo (Admin)":
+    st.title("👥 Gestión de Equipo (Roles y Accesos)")
+    tab_users, tab_roles, tab_assign, tab_org = st.tabs(["Usuarios", "Roles y Permisos", "Asignación de Clientes", "Organigrama"])
+    
+    with tab_users:
+        col_new, col_list = st.columns([1, 2])
+        df_roles = db.obtener_roles()
+        df_users = db.obtener_usuarios_despacho()
+        
+        with col_new:
+            st.subheader("Registrar/Editar Usuario")
+            with st.form("form_usuario"):
+                # Lista de usuarios existentes
+                opciones_user = ["--- Crear Nuevo ---"] + df_users['usuario'].tolist() if not df_users.empty else ["--- Crear Nuevo ---"]
+                user_sel = st.selectbox("Seleccionar Acción", opciones_user)
+                
+                # Valores por defecto
+                def_nom, def_usr, def_rol_id, def_rep = "", "", 2, None
+                is_edit = user_sel != "--- Crear Nuevo ---"
+                
+                if is_edit:
+                    u_row = df_users[df_users['usuario'] == user_sel].iloc[0]
+                    def_nom, def_usr = u_row['nombre'], u_row['usuario']
+                    def_rol_id = int(u_row['rol_id'])
+                    def_rep = u_row['reporta_a_id']
+                
+                nombre_u = st.text_input("Nombre Completo", value=def_nom)
+                usuario_u = st.text_input("Usuario (Login)", value=def_usr, disabled=is_edit)
+                pass_label = "Nueva Contraseña (Dejar en blanco para no cambiar)" if is_edit else "Contraseña"
+                pass_u = st.text_input(pass_label, type="password")
+                
+                # Opciones de rol y supervisor
+                if not df_roles.empty:
+                    nombres_roles = df_roles['nombre_rol'].tolist()
+                    idx_rol = nombres_roles.index(df_roles[df_roles['id'] == def_rol_id]['nombre_rol'].values[0]) if def_rol_id in df_roles['id'].values else 0
+                    rol_sel = st.selectbox("Puesto / Rol", nombres_roles, index=idx_rol)
+                else:
+                    rol_sel = None
+                    st.warning("No hay roles creados.")
+                
+                if not df_users.empty:
+                    # Supervisor no puede ser uno mismo
+                    opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != user_sel]
+                    idx_sup = 0
+                    for i, (_, s_id) in enumerate(opciones_super):
+                        if s_id == def_rep:
+                            idx_sup = i
+                            break
+                    sup_sel = st.selectbox("Reporta a (Supervisor)", [x[0] for x in opciones_super], index=idx_sup)
+                else:
+                    sup_sel = "Ninguno"
+                
+                if st.form_submit_button("Guardar Usuario"):
+                    if nombre_u and usuario_u and rol_sel:
+                        r_id = df_roles[df_roles['nombre_rol'] == rol_sel]['id'].values[0]
+                        s_id = next((s_id for s_name, s_id in opciones_super if s_name == sup_sel), None) if not df_users.empty else None
+                        
+                        if is_edit:
+                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None)
+                        else:
+                            if not pass_u:
+                                ok, msg = False, "Contraseña es requerida para nuevo usuario."
+                            else:
+                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id)
+                        if ok: st.success(msg); st.rerun()
+                        else: st.error(msg)
+                    else:
+                        st.warning("Completa todos los campos básicos.")
+                        
+        with col_list:
+            st.subheader("Directorio del Staff")
+            if not df_users.empty:
+                st.dataframe(df_users[['nombre', 'usuario', 'rol']], use_container_width=True, hide_index=True)
+            else:
+                st.info("No hay usuarios registrados.")
+                
+    with tab_roles:
+        col_rnew, col_rlist = st.columns([1, 2])
+        todos_modulos = [
+            "Dashboard", "Personas Físicas", "Personas Morales", "Cálculo de Impuestos y XML",
+            "Conciliación Bancaria y DIOT", "Descarga Masiva SAT (Simulador)", "Exportación a CONTPAQi",
+            "Calendario General", "Expediente de Cliente", "Control de Honorarios", "Notificaciones a Clientes",
+            "Agenda y Citas", "Facturación (CFDI)", "Tablero Kanban (Staff)", "Envío de Líneas de Captura",
+            "🤖 Asistente Fiscal AI", "Mi Despacho (Finanzas)", "Gestión de Equipo (Admin)", "Configuración de Marca"
+        ]
+        with col_rnew:
+            st.subheader("Crear/Editar Puesto")
+            with st.form("form_rol"):
+                opciones_r = ["--- Crear Nuevo ---"] + df_roles['nombre_rol'].tolist() if not df_roles.empty else ["--- Crear Nuevo ---"]
+                r_sel = st.selectbox("Acción", opciones_r)
+                is_r_edit = r_sel != "--- Crear Nuevo ---"
+                
+                def_rn, def_rj, def_rperm = "", 5, []
+                if is_r_edit:
+                    r_row = df_roles[df_roles['nombre_rol'] == r_sel].iloc[0]
+                    def_rn, def_rj = r_row['nombre_rol'], r_row['nivel_jerarquia']
+                    import json
+                    def_rperm = json.loads(r_row['permisos_json'])
+                
+                nom_r = st.text_input("Nombre del Puesto", value=def_rn)
+                jer_r = st.number_input("Nivel Jerárquico (1=Jefe, 5=Operativo)", min_value=1, max_value=10, value=int(def_rj))
+                
+                st.write("**Permisos de Acceso:**")
+                permisos_seleccionados = []
+                for mod in todos_modulos:
+                    if st.checkbox(mod, value=(mod in def_rperm)):
+                        permisos_seleccionados.append(mod)
+                
+                if st.form_submit_button("Guardar Puesto"):
+                    if nom_r:
+                        if is_r_edit:
+                            db.actualizar_rol(int(r_row['id']), nom_r, jer_r, permisos_seleccionados)
+                            st.success("Rol actualizado.")
+                        else:
+                            ok, m = db.agregar_rol(nom_r, jer_r, permisos_seleccionados)
+                            if ok: st.success(m)
+                            else: st.error(m)
+                        st.rerun()
+                    else:
+                        st.warning("El nombre es obligatorio.")
+        
+        with col_rlist:
+            st.subheader("Puestos Actuales")
+            if not df_roles.empty:
+                st.dataframe(df_roles[['nombre_rol', 'nivel_jerarquia']], use_container_width=True, hide_index=True)
+            
+    with tab_assign:
+        st.subheader("Asignar Clientes a Empleados (Segregación de Datos)")
+        # Excluir a los Admins (Nivel 1) porque ellos ven todo
+        empleados_op = df_users[~df_users['rol'].str.contains('Admin', case=False, na=False)]
+        if not empleados_op.empty:
+            emp_sel_nombre = st.selectbox("Selecciona un Empleado", empleados_op['nombre'].tolist())
+            emp_id = empleados_op[empleados_op['nombre'] == emp_sel_nombre]['id'].values[0]
+            
+            df_todos_clientes = db.obtener_clientes()
+            clientes_asignados = db.obtener_asignaciones(emp_id)
+            
+            st.write(f"Clientes asignados a **{emp_sel_nombre}**:")
+            cols_grid = st.columns(3)
+            for idx, row in df_todos_clientes.iterrows():
+                asignado = row['id'] in clientes_asignados
+                with cols_grid[idx % 3]:
+                    nuevo_estado = st.checkbox(f"{row['nombre']}", value=asignado, key=f"assign_{emp_id}_{row['id']}")
+                    if nuevo_estado != asignado:
+                        if nuevo_estado:
+                            db.asignar_cliente_a_usuario(emp_id, row['id'])
+                        else:
+                            db.desasignar_cliente_de_usuario(emp_id, row['id'])
+                        st.rerun()
+        else:
+            st.info("No hay empleados operativos registrados.")
+            
+    with tab_org:
+        st.subheader("Organigrama del Despacho")
+        if not df_users.empty and 'reporta_a_id' in df_users.columns:
+            # Crear nodos simples
+            org_data = []
+            for _, r in df_users.iterrows():
+                sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) else ""
+                org_data.append({"Nombre": r['nombre'], "Puesto": r['rol'], "Reporta_A": sup_name})
+            
+            df_org = pd.DataFrame(org_data)
+            st.dataframe(df_org, use_container_width=True, hide_index=True)
+            st.info("💡 En una versión futura podemos integrar un gráfico interactivo (Ej. Treemap) usando Plotly con esta estructura.")
+
+if seleccion == "Descarga Masiva SAT (Simulador)":
     st.title("☁️ Conexión y Descarga Masiva del SAT")
     st.write("Módulo avanzado para conectar directamente con los servidores del SAT y descargar todos los XML (Emitidos y Recibidos) y Metadata.")
     
