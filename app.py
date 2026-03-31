@@ -1100,8 +1100,9 @@ elif seleccion == "Gestión de Equipo (Admin)":
             user_sel = st.selectbox("Seleccionar Acción", opciones_user, index=idx_user)
             if user_sel != st.session_state.user_sel_val:
                 st.session_state.user_sel_val = user_sel
-                # Si el usuario cambia manualmente el selectbox, olvidamos lo que seleccionó en la tabla
-                st.session_state.last_grid_user = None 
+                # Mantenemos last_grid_user intacto. Así, si AgGrid sigue mandando 
+                # su selección vieja (ej. "admin") en cada tecla presionada,
+                # nuestro código sabrá que ya lo procesó y lo ignorará.
                 st.rerun()
             
             # Valores por defecto
@@ -1225,7 +1226,6 @@ elif seleccion == "Gestión de Equipo (Admin)":
             r_sel = st.selectbox("Acción", opciones_r, index=idx_rol_sel)
             if r_sel != st.session_state.rol_sel_val:
                 st.session_state.rol_sel_val = r_sel
-                st.session_state.last_grid_rol = None
                 st.rerun()
                 
             is_r_edit = r_sel != "--- Crear Nuevo ---"
