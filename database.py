@@ -127,6 +127,17 @@ def init_db():
         )
     ''')
 
+    # Tabla Bitácora de Equipo (Log)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bitacora_equipo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
+            autor TEXT NOT NULL,
+            accion TEXT NOT NULL,
+            detalle TEXT
+        )
+    ''')
+
     # Tabla de Usuarios del Despacho (Socio, Auxiliar, Gerente)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS usuarios_despacho (
@@ -794,3 +805,18 @@ def eliminar_nota_crm(nota_id):
     cursor.execute("DELETE FROM notas_crm WHERE id = ?", (nota_id,))
     conn.commit()
     conn.close()
+
+
+# --- Funciones para Bitácora de Equipo ---
+def registrar_bitacora_equipo(autor, accion, detalle):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO bitacora_equipo (autor, accion, detalle) VALUES (?, ?, ?)", (autor, accion, detalle))
+    conn.commit()
+    conn.close()
+
+def obtener_bitacora_equipo():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT id, datetime(fecha, 'localtime') as fecha_local, autor, accion, detalle FROM bitacora_equipo ORDER BY fecha DESC", conn)
+    conn.close()
+    return df

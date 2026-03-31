@@ -1072,7 +1072,7 @@ elif seleccion == "Control de Honorarios":
 
 elif seleccion == "Gestión de Equipo (Admin)":
     st.title("👥 Gestión de Equipo (Roles y Accesos)")
-    tab_users, tab_roles, tab_assign, tab_org = st.tabs(["Usuarios", "Roles y Permisos", "Asignación de Clientes", "Organigrama"])
+    tab_users, tab_roles, tab_assign, tab_org, tab_bitacora = st.tabs(["Usuarios", "Roles y Permisos", "Asignación de Clientes", "Organigrama", "Bitácora (Log)"])
     
     with tab_users:
         col_new, col_list = st.columns([1, 2])
@@ -1187,7 +1187,12 @@ elif seleccion == "Gestión de Equipo (Admin)":
                                 if subordinados:
                                     nombres_movidos = db.reasignar_subordinados(s_id, subordinados)
                                     nombres_str = ", ".join(nombres_movidos)
-                                    st.warning(f"Usuario inactivado. Se han reasignado automáticamente {len(subordinados)} subordinados ({nombres_str}) a su jefe inmediato.")
+                                    detalle = f"Se inactivó a {nombre_u}. Sus subordinados ({nombres_str}) pasaron a reportar al jefe inmediato."
+                                    st.warning(f"Usuario inactivado. Se han reasignado automáticamente {len(subordinados)} subordinados a su jefe inmediato.")
+                                    db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Inactivación y Reasignación", detalle)
+                            else:
+                                detalle = f"Se actualizaron los datos de {nombre_u} (Rol/Jerarquía)."
+                                db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Edición de Perfil", detalle)
                         else:
                             if not pass_u:
                                 ok, msg = False, "Contraseña es requerida para nuevo usuario."
@@ -1196,6 +1201,8 @@ elif seleccion == "Gestión de Equipo (Admin)":
                                 # Para asignar subordinados, necesitamos el ID del nuevo usuario
                                 if ok:
                                     nuevo_usuario_id = db.obtener_id_usuario_por_login(usuario_u)
+                                    detalle = f"Se creó el nuevo usuario {nombre_u} con estatus {estatus_u}."
+                                    db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Alta de Usuario", detalle)
 
                         if ok: 
                             # Lógica de autoasignación de subordinados:
@@ -1227,7 +1234,9 @@ elif seleccion == "Gestión de Equipo (Admin)":
                                 if subordinados_a_mover:
                                     nombres_movidos = db.reasignar_subordinados(nuevo_usuario_id, subordinados_a_mover)
                                     nombres_str = ", ".join(nombres_movidos)
-                                    st.success(f"¡Puente jerárquico! Se auto-asignaron {len(subordinados_a_mover)} subordinados a este perfil: {nombres_str}.")
+                                    msg_pantalla = f"¡Puente jerárquico! Se auto-asignaron {len(subordinados_a_mover)} subordinados a este perfil: {nombres_str}."
+                                    st.success(msg_pantalla)
+                                    db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Puente Jerárquico", msg_pantalla)
 
                             st.success(msg)
                             import time
@@ -1458,15 +1467,37 @@ elif seleccion == "Gestión de Equipo (Admin)":
             dot.attr('node', shape='box', style='filled', fontname='Helvetica', fontcolor='white')
             dot.attr('edge', arrowhead='vee', color='#666666')
 
+            # Mapeo de carga de trabajo (Clientes y Tareas Kanban)
+            clientes_asignados = {}
+            for index_u, r_u in df_graficar.iterrows():
+                u_id_int = int(r_u['id_x'] if 'id_x' in df_graficar.columns else r_u['id'])
+                asignaciones = db.obtener_asignaciones(u_id_int)
+                clientes_asignados[u_id_int] = len(asignaciones)
+
+            # Para Kanban, necesitamos obtener las tareas del staff
+            tareas_por_usuario = {}
+            for col_name in ["Por Revisar", "En Proceso", "Lista para Envío"]:
+                df_tareas = db.obtener_tareas_kanban(col_name)
+                for _, row_t in df_tareas.iterrows():
+                    nombre_asig = row_t['Asignado']
+                    if pd.notna(nombre_asig):
+                        tareas_por_usuario[nombre_asig] = tareas_por_usuario.get(nombre_asig, 0) + 1
+
             # Añadir nodos
             for _, r in df_graficar.iterrows():
                 u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
+                u_id_int = int(u_id)
                 nivel = r['nivel_jerarquia'] if pd.notna(r['nivel_jerarquia']) else 5
+                nombre_usuario = r['nombre']
 
                 # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres
                 safe_nombre = html.escape(r['nombre'])
                 safe_rol = html.escape(r['rol'])
-                label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I>>"
+
+                c_clientes = clientes_asignados.get(u_id_int, 0)
+                c_tareas = tareas_por_usuario.get(r['nombre'], 0)
+
+                label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I><BR/><FONT POINT-SIZE=\"10\">👥 Clientes: {c_clientes} | 📋 Tareas: {c_tareas}</FONT>>"
 
                 color_nodo = obtener_color_por_jerarquia(nivel)
                 dot.node(u_id, label, fillcolor=color_nodo)
@@ -1481,6 +1512,18 @@ elif seleccion == "Gestión de Equipo (Admin)":
 
             st.graphviz_chart(dot, use_container_width=True)
 
+            # Botón de Descarga PNG
+            try:
+                img_data = dot.pipe(format='png')
+                st.download_button(
+                    label="⬇️ Descargar Organigrama (PNG)",
+                    data=img_data,
+                    file_name="organigrama_despacho.png",
+                    mime="image/png"
+                )
+            except Exception as e:
+                st.caption("Nota: Para habilitar la descarga en PNG, se requiere tener instalado Graphviz y estar disponible en el PATH del sistema.")
+
             # Ocultar la tabla preexistente
             with st.expander("Ver Datos en Tabla"):
                 org_data = []
@@ -1494,6 +1537,18 @@ elif seleccion == "Gestión de Equipo (Admin)":
 
                 df_org = pd.DataFrame(org_data)
                 st.dataframe(df_org, use_container_width=True, hide_index=True)
+
+    with tab_bitacora:
+        st.subheader("Historial de Movimientos del Equipo")
+        st.write("Registro de auditoría de todas las altas, bajas y reasignaciones jerárquicas.")
+
+        df_bitacora = db.obtener_bitacora_equipo()
+        if not df_bitacora.empty:
+            # Format dataframe for better UI
+            df_bitacora.columns = ['ID', 'Fecha Local', 'Autor', 'Acción', 'Detalle']
+            st.dataframe(df_bitacora[['Fecha Local', 'Autor', 'Acción', 'Detalle']], use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no hay movimientos registrados en la bitácora.")
 
 if seleccion == "Descarga Masiva SAT (Simulador)":
     st.title("☁️ Conexión y Descarga Masiva del SAT")
