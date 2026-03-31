@@ -1072,7 +1072,7 @@ elif seleccion == "Control de Honorarios":
 
 elif seleccion == "Gestión de Equipo (Admin)":
     st.title("👥 Gestión de Equipo (Roles y Accesos)")
-    tab_users, tab_roles, tab_assign, tab_org = st.tabs(["Usuarios", "Roles y Permisos", "Asignación de Clientes", "Organigrama"])
+    tab_users, tab_roles, tab_assign, tab_org, tab_bitacora = st.tabs(["Usuarios", "Roles y Permisos", "Asignación de Clientes", "Organigrama", "Bitácora (Log)"])
     
     with tab_users:
         col_new, col_list = st.columns([1, 2])
@@ -1109,17 +1109,25 @@ elif seleccion == "Gestión de Equipo (Admin)":
             def_nom, def_usr, def_rol_id, def_rep = "", "", 2, None
             is_edit = user_sel != "--- Crear Nuevo ---"
             
+            def_estatus = "Activo"
             if is_edit:
                 u_row = df_users[df_users['usuario'] == user_sel].iloc[0]
                 def_nom, def_usr = u_row['nombre'], u_row['usuario']
                 def_rol_id = int(u_row['rol_id'])
                 def_rep = u_row['reporta_a_id']
+                def_estatus = u_row['estatus'] if 'estatus' in u_row and pd.notna(u_row['estatus']) else "Activo"
             
             nombre_u = st.text_input("Nombre Completo", value=def_nom)
             usuario_u = st.text_input("Usuario (Login)", value=def_usr, disabled=is_edit)
             pass_label = "Nueva Contraseña (Dejar en blanco para no cambiar)" if is_edit else "Contraseña"
             pass_u = st.text_input(pass_label, type="password")
             
+            # Selector de estatus
+            if is_edit:
+                estatus_u = st.selectbox("Estatus", ["Activo", "Inactivo"], index=0 if def_estatus == "Activo" else 1)
+            else:
+                estatus_u = "Activo" # Siempre Activo para nuevos
+
             # Opciones de rol y supervisor
             if not df_roles.empty:
                 nombres_roles = df_roles['nombre_rol'].tolist()
@@ -1130,8 +1138,27 @@ elif seleccion == "Gestión de Equipo (Admin)":
                 st.warning("No hay roles creados.")
             
             if not df_users.empty:
-                # Supervisor no puede ser uno mismo
-                opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != user_sel]
+                # Determinar el nivel jerárquico del rol seleccionado
+                nivel_rol_actual = 999
+                if rol_sel and not df_roles.empty:
+                    match_rol = df_roles[df_roles['nombre_rol'] == rol_sel]
+                    if not match_rol.empty:
+                        nivel_rol_actual = match_rol['nivel_jerarquia'].values[0]
+
+                # Supervisor no puede ser uno mismo y debe tener un nivel jerárquico menor o igual (es decir, superior o igual jerárquicamente)
+
+                # Para cruzar la jerarquía del supervisor, combinamos df_users con df_roles
+                df_users_with_roles = df_users.merge(df_roles[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left', suffixes=('', '_rol'))
+
+                opciones_super = [("Ninguno", None)]
+                for _, row in df_users_with_roles.iterrows():
+                    # Supervisor no puede ser uno mismo
+                    if is_edit and row['usuario'] == user_sel:
+                        continue
+                    # Su nivel jerárquico debe ser estrictamente menor (más jerarquía)
+                    if pd.notna(row['nivel_jerarquia']) and row['nivel_jerarquia'] < nivel_rol_actual:
+                        opciones_super.append((row['nombre'], row['id']))
+
                 idx_sup = 0
                 for i, (_, s_id) in enumerate(opciones_super):
                     if s_id == def_rep:
@@ -1151,13 +1178,66 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         s_id = int(s_id) if s_id is not None else None
 
                         if is_edit:
-                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None)
+                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None, estatus_u)
+                            nuevo_usuario_id = int(u_row['id'])
+
+                            # Si se marcó como inactivo, reasignar sus subordinados a su jefe
+                            if estatus_u == "Inactivo" and def_estatus == "Activo":
+                                subordinados = db.obtener_subordinados_directos(nuevo_usuario_id)
+                                if subordinados:
+                                    nombres_movidos = db.reasignar_subordinados(s_id, subordinados)
+                                    nombres_str = ", ".join(nombres_movidos)
+                                    detalle = f"Se inactivó a {nombre_u}. Sus subordinados ({nombres_str}) pasaron a reportar al jefe inmediato."
+                                    st.warning(f"Usuario inactivado. Se han reasignado automáticamente {len(subordinados)} subordinados a su jefe inmediato.")
+                                    db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Inactivación y Reasignación", detalle)
+                            else:
+                                detalle = f"Se actualizaron los datos de {nombre_u} (Rol/Jerarquía)."
+                                db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Edición de Perfil", detalle)
                         else:
                             if not pass_u:
                                 ok, msg = False, "Contraseña es requerida para nuevo usuario."
                             else:
-                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id)
+                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id, estatus_u)
+                                # Para asignar subordinados, necesitamos el ID del nuevo usuario
+                                if ok:
+                                    nuevo_usuario_id = db.obtener_id_usuario_por_login(usuario_u)
+                                    detalle = f"Se creó el nuevo usuario {nombre_u} con estatus {estatus_u}."
+                                    db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Alta de Usuario", detalle)
+
                         if ok: 
+                            # Lógica de autoasignación de subordinados:
+                            # Si este usuario tiene un supervisor (s_id), y el nivel jerárquico de este usuario (nivel_rol_actual)
+                            # es mayor (es decir, menos jerarquía) que el del supervisor.
+                            # Debemos buscar quiénes le reportaban a ese supervisor (s_id) pero que tengan un nivel jerárquico MAYOR que el nivel_rol_actual.
+                            # Y pasárselos a que reporten a este nuevo usuario.
+                            roles_changed = not is_edit or int(u_row['rol_id']) != r_id
+
+                            sup_changed = not is_edit or u_row['reporta_a_id'] != s_id
+
+                            if (roles_changed or sup_changed) and s_id is not None and nuevo_usuario_id:
+                                # nivel_rol_actual ya está definido arriba: es el nivel jerárquico del rol que se acaba de guardar.
+                                df_actualizado = db.obtener_usuarios_despacho()
+                                df_roles_act = db.obtener_roles()
+                                df_combinado = df_actualizado.merge(df_roles_act[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left')
+
+                                subordinados_a_mover = []
+                                # Buscamos usuarios que actualmente reporten al jefe directo de este usuario (s_id)
+                                for _, sub_row in df_combinado.iterrows():
+                                    # Importante: No mover al usuario que acabamos de editar, ni a otros con igual o más jerarquía (nivel menor o igual)
+                                    if sub_row['reporta_a_id'] == s_id and sub_row['id_x'] != nuevo_usuario_id:
+                                        nivel_sub = sub_row['nivel_jerarquia']
+                                        # Si el subordinado tiene más nivel (menos jerarquía, es decir, un número mayor)
+                                        if pd.notna(nivel_sub) and nivel_sub > nivel_rol_actual:
+                                            subordinados_a_mover.append(int(sub_row['id_x'])) # id_x es el id del usuario por el merge
+
+                                # Actualizar esos subordinados para que reporten a nuevo_usuario_id
+                                if subordinados_a_mover:
+                                    nombres_movidos = db.reasignar_subordinados(nuevo_usuario_id, subordinados_a_mover)
+                                    nombres_str = ", ".join(nombres_movidos)
+                                    msg_pantalla = f"¡Puente jerárquico! Se auto-asignaron {len(subordinados_a_mover)} subordinados a este perfil: {nombres_str}."
+                                    st.success(msg_pantalla)
+                                    db.registrar_bitacora_equipo(st.session_state.logged_in_staff['nombre'], "Puente Jerárquico", msg_pantalla)
+
                             st.success(msg)
                             import time
                             time.sleep(1.5)
@@ -1333,15 +1413,142 @@ elif seleccion == "Gestión de Equipo (Admin)":
     with tab_org:
         st.subheader("Organigrama del Despacho")
         if not df_users.empty and 'reporta_a_id' in df_users.columns:
-            # Crear nodos simples
-            org_data = []
-            for _, r in df_users.iterrows():
-                sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) else ""
-                org_data.append({"Nombre": r['nombre'], "Puesto": r['rol'], "Reporta_A": sup_name})
-            
-            df_org = pd.DataFrame(org_data)
-            st.dataframe(df_org, use_container_width=True, hide_index=True)
-            st.info("💡 En una versión futura podemos integrar un gráfico interactivo (Ej. Treemap) usando Plotly con esta estructura.")
+            import graphviz
+            import html
+
+            # Solo consideramos usuarios Activos
+            df_activos = df_users[df_users['estatus'] == 'Activo'] if 'estatus' in df_users.columns else df_users
+
+            # Filtro de líder
+            opciones_lider = ["-- Toda la Empresa --"] + df_activos['nombre'].tolist()
+            lider_seleccionado = st.selectbox("Filtrar por rama de líder:", opciones_lider)
+
+            # Lógica recursiva para obtener solo a los subordinados de esa rama
+            valid_ids_org = set()
+            if lider_seleccionado == "-- Toda la Empresa --":
+                valid_ids_org = set(df_activos['id'].tolist())
+            else:
+                id_lider = df_activos[df_activos['nombre'] == lider_seleccionado]['id'].values[0]
+
+                # Función recursiva para encontrar descendencia
+                def obtener_descendencia(parent_id, current_set):
+                    current_set.add(parent_id)
+                    hijos = df_activos[df_activos['reporta_a_id'] == parent_id]['id'].tolist()
+                    for hijo_id in hijos:
+                        obtener_descendencia(hijo_id, current_set)
+
+                obtener_descendencia(id_lider, valid_ids_org)
+
+            # Filtrar dataframe a graficar
+            df_graficar = df_activos[df_activos['id'].isin(valid_ids_org)]
+
+            # Cruce con roles para obtener nivel de jerarquía (y decidir color)
+            if not df_roles.empty:
+                df_graficar = df_graficar.merge(df_roles[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left')
+            else:
+                df_graficar['nivel_jerarquia'] = 5 # Default si no hay roles
+
+            # Colores base según jerarquía
+            def obtener_color_por_jerarquia(nivel):
+                # Tonos de azul y verde
+                colores = {
+                    1: '#1E3A8A', # Nivel 1 (Director) - Azul oscuro
+                    2: '#2563EB', # Nivel 2 - Azul brillante
+                    3: '#3B82F6', # Nivel 3 - Azul normal
+                    4: '#059669', # Nivel 4 - Verde oscuro
+                    5: '#10B981', # Nivel 5 - Verde
+                    6: '#34D399', # Nivel 6 - Verde claro
+                }
+                # Para niveles mayores o desconocidos, gris oscuro
+                return colores.get(nivel, '#4B5563')
+
+            # Crear grafo jerárquico
+            dot = graphviz.Digraph(comment='Organigrama')
+            dot.attr('node', shape='box', style='filled', fontname='Helvetica', fontcolor='white')
+            dot.attr('edge', arrowhead='vee', color='#666666')
+
+            # Mapeo de carga de trabajo (Clientes y Tareas Kanban)
+            clientes_asignados = {}
+            for index_u, r_u in df_graficar.iterrows():
+                u_id_int = int(r_u['id_x'] if 'id_x' in df_graficar.columns else r_u['id'])
+                asignaciones = db.obtener_asignaciones(u_id_int)
+                clientes_asignados[u_id_int] = len(asignaciones)
+
+            # Para Kanban, necesitamos obtener las tareas del staff
+            tareas_por_usuario = {}
+            for col_name in ["Por Revisar", "En Proceso", "Lista para Envío"]:
+                df_tareas = db.obtener_tareas_kanban(col_name)
+                for _, row_t in df_tareas.iterrows():
+                    nombre_asig = row_t['Asignado']
+                    if pd.notna(nombre_asig):
+                        tareas_por_usuario[nombre_asig] = tareas_por_usuario.get(nombre_asig, 0) + 1
+
+            # Añadir nodos
+            for _, r in df_graficar.iterrows():
+                u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
+                u_id_int = int(u_id)
+                nivel = r['nivel_jerarquia'] if pd.notna(r['nivel_jerarquia']) else 5
+                nombre_usuario = r['nombre']
+
+                # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres
+                safe_nombre = html.escape(r['nombre'])
+                safe_rol = html.escape(r['rol'])
+
+                c_clientes = clientes_asignados.get(u_id_int, 0)
+                c_tareas = tareas_por_usuario.get(r['nombre'], 0)
+
+                label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I><BR/><FONT POINT-SIZE=\"10\">👥 Clientes: {c_clientes} | 📋 Tareas: {c_tareas}</FONT>>"
+
+                color_nodo = obtener_color_por_jerarquia(nivel)
+                dot.node(u_id, label, fillcolor=color_nodo)
+
+            # Añadir bordes (conexiones jerárquicas)
+            for _, r in df_graficar.iterrows():
+                u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
+                parent_id = r['reporta_a_id']
+                if pd.notna(parent_id) and parent_id in valid_ids_org:
+                    # El padre apunta al hijo
+                    dot.edge(str(int(parent_id)), u_id)
+
+            st.graphviz_chart(dot, use_container_width=True)
+
+            # Botón de Descarga PNG
+            try:
+                img_data = dot.pipe(format='png')
+                st.download_button(
+                    label="⬇️ Descargar Organigrama (PNG)",
+                    data=img_data,
+                    file_name="organigrama_despacho.png",
+                    mime="image/png"
+                )
+            except Exception as e:
+                st.caption("Nota: Para habilitar la descarga en PNG, se requiere tener instalado Graphviz y estar disponible en el PATH del sistema.")
+
+            # Ocultar la tabla preexistente
+            with st.expander("Ver Datos en Tabla"):
+                org_data = []
+                valid_ids_table = df_users['id'].tolist()
+
+                for _, r in df_users.iterrows():
+
+                    sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) and r['reporta_a_id'] in valid_ids_table else ""
+
+                    org_data.append({"Nombre": r['nombre'], "Puesto": r['rol'], "Reporta_A": sup_name})
+
+                df_org = pd.DataFrame(org_data)
+                st.dataframe(df_org, use_container_width=True, hide_index=True)
+
+    with tab_bitacora:
+        st.subheader("Historial de Movimientos del Equipo")
+        st.write("Registro de auditoría de todas las altas, bajas y reasignaciones jerárquicas.")
+
+        df_bitacora = db.obtener_bitacora_equipo()
+        if not df_bitacora.empty:
+            # Format dataframe for better UI
+            df_bitacora.columns = ['ID', 'Fecha Local', 'Autor', 'Acción', 'Detalle']
+            st.dataframe(df_bitacora[['Fecha Local', 'Autor', 'Acción', 'Detalle']], use_container_width=True, hide_index=True)
+        else:
+            st.info("Aún no hay movimientos registrados en la bitácora.")
 
 if seleccion == "Descarga Masiva SAT (Simulador)":
     st.title("☁️ Conexión y Descarga Masiva del SAT")

@@ -127,6 +127,17 @@ def init_db():
         )
     ''')
 
+    # Tabla Bitácora de Equipo (Log)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS bitacora_equipo (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            fecha DATETIME DEFAULT CURRENT_TIMESTAMP,
+            autor TEXT NOT NULL,
+            accion TEXT NOT NULL,
+            detalle TEXT
+        )
+    ''')
+
     # Tabla de Usuarios del Despacho (Socio, Auxiliar, Gerente)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS usuarios_despacho (
@@ -239,6 +250,12 @@ def init_db():
     
     # Insertar Roles por defecto si no existen
     import json
+    # Add estatus if it doesn't exist
+    try:
+        cursor.execute("ALTER TABLE usuarios_despacho ADD COLUMN estatus TEXT DEFAULT 'Activo'")
+    except sqlite3.OperationalError:
+        pass # Column already exists
+
     cursor.execute("SELECT COUNT(*) FROM roles_despacho")
     if cursor.fetchone()[0] == 0:
         todos_los_modulos = json.dumps([
@@ -322,7 +339,7 @@ def verificar_login_equipo(usuario, contrasena):
 def obtener_usuarios_despacho():
     conn = sqlite3.connect(DB_NAME)
     query = '''
-        SELECT u.id, u.nombre, u.usuario, r.nombre_rol as rol, u.rol_id, u.reporta_a_id
+        SELECT u.id, u.nombre, u.usuario, r.nombre_rol as rol, u.rol_id, u.reporta_a_id, u.estatus
         FROM usuarios_despacho u
         JOIN roles_despacho r ON u.rol_id = r.id
     '''
@@ -330,12 +347,12 @@ def obtener_usuarios_despacho():
     conn.close()
     return df
 
-def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=None):
+def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=None, estatus='Activo'):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         hash_pwd = hash_password(contrasena)
-        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol_id, reporta_a_id) VALUES (?, ?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol_id, reporta_a_id))
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol_id, reporta_a_id, estatus) VALUES (?, ?, ?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol_id, reporta_a_id, estatus))
         conn.commit()
         return True, "Usuario agregado."
     except sqlite3.IntegrityError:
@@ -343,17 +360,50 @@ def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=N
     finally:
         conn.close()
 
-def actualizar_usuario_despacho(user_id, nombre, usuario, rol_id, reporta_a_id=None, nueva_contrasena=None):
+def obtener_id_usuario_por_login(usuario_login):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM usuarios_despacho WHERE usuario=?", (usuario_login,))
+    res = cursor.fetchone()
+    conn.close()
+    return res[0] if res else None
+
+def obtener_subordinados_directos(supervisor_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM usuarios_despacho WHERE reporta_a_id = ? AND estatus = 'Activo'", (supervisor_id,))
+    res = [row[0] for row in cursor.fetchall()]
+    conn.close()
+    return res
+
+def reasignar_subordinados(nuevo_supervisor_id, subordinados_ids):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    nombres_reasignados = []
+
+    # Obtener los nombres antes de actualizar para el mensaje
+    placeholders = ', '.join('?' for _ in subordinados_ids)
+    cursor.execute(f"SELECT nombre FROM usuarios_despacho WHERE id IN ({placeholders})", tuple(subordinados_ids))
+    for row in cursor.fetchall():
+        nombres_reasignados.append(row[0])
+
+    for sub_id in subordinados_ids:
+        cursor.execute("UPDATE usuarios_despacho SET reporta_a_id = ? WHERE id = ?", (nuevo_supervisor_id, sub_id))
+    conn.commit()
+    conn.close()
+    return nombres_reasignados
+
+def actualizar_usuario_despacho(user_id, nombre, usuario, rol_id, reporta_a_id=None, nueva_contrasena=None, estatus='Activo'):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         if nueva_contrasena:
             hash_pwd = hash_password(nueva_contrasena)
-            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, contrasena=? WHERE id=?", 
-                           (nombre, usuario, rol_id, reporta_a_id, hash_pwd, user_id))
+            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, contrasena=?, estatus=? WHERE id=?",
+                           (nombre, usuario, rol_id, reporta_a_id, hash_pwd, estatus, user_id))
         else:
-            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=? WHERE id=?", 
-                           (nombre, usuario, rol_id, reporta_a_id, user_id))
+            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, estatus=? WHERE id=?",
+                           (nombre, usuario, rol_id, reporta_a_id, estatus, user_id))
         conn.commit()
         return True, "Usuario actualizado exitosamente."
     except sqlite3.IntegrityError:
@@ -755,3 +805,18 @@ def eliminar_nota_crm(nota_id):
     cursor.execute("DELETE FROM notas_crm WHERE id = ?", (nota_id,))
     conn.commit()
     conn.close()
+
+
+# --- Funciones para Bitácora de Equipo ---
+def registrar_bitacora_equipo(autor, accion, detalle):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO bitacora_equipo (autor, accion, detalle) VALUES (?, ?, ?)", (autor, accion, detalle))
+    conn.commit()
+    conn.close()
+
+def obtener_bitacora_equipo():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT id, datetime(fecha, 'localtime') as fecha_local, autor, accion, detalle FROM bitacora_equipo ORDER BY fecha DESC", conn)
+    conn.close()
+    return df
