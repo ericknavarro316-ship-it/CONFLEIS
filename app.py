@@ -1088,21 +1088,24 @@ elif seleccion == "Gestión de Equipo (Admin)":
             if 'user_sel_val' not in st.session_state:
                 st.session_state.user_sel_val = "--- Crear Nuevo ---"
                 
+            # Siempre recalcular el índice basado en la variable de estado
             idx_user = 0
             if st.session_state.user_sel_val in opciones_user:
                 idx_user = opciones_user.index(st.session_state.user_sel_val)
                 
-            def on_user_change():
-                st.session_state.user_sel_val = st.session_state.user_sel_widget
-
-            user_sel = st.selectbox("Seleccionar Acción", opciones_user, index=idx_user, key="user_sel_widget", on_change=on_user_change)
+            # No usamos un callback on_change con widget key para no competir,
+            # leemos el valor del selectbox, y si cambió, disparamos rerun.
+            user_sel = st.selectbox("Seleccionar Acción", opciones_user, index=idx_user)
+            if user_sel != st.session_state.user_sel_val:
+                st.session_state.user_sel_val = user_sel
+                st.rerun()
             
             # Valores por defecto
             def_nom, def_usr, def_rol_id, def_rep = "", "", 2, None
-            is_edit = st.session_state.user_sel_val != "--- Crear Nuevo ---"
+            is_edit = user_sel != "--- Crear Nuevo ---"
             
             if is_edit:
-                u_row = df_users[df_users['usuario'] == st.session_state.user_sel_val].iloc[0]
+                u_row = df_users[df_users['usuario'] == user_sel].iloc[0]
                 def_nom, def_usr = u_row['nombre'], u_row['usuario']
                 def_rol_id = int(u_row['rol_id'])
                 def_rep = u_row['reporta_a_id']
@@ -1123,7 +1126,7 @@ elif seleccion == "Gestión de Equipo (Admin)":
             
             if not df_users.empty:
                 # Supervisor no puede ser uno mismo
-                opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != st.session_state.user_sel_val]
+                opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != user_sel]
                 idx_sup = 0
                 for i, (_, s_id) in enumerate(opciones_super):
                     if s_id == def_rep:
@@ -1162,17 +1165,23 @@ elif seleccion == "Gestión de Equipo (Admin)":
         with col_list:
             st.subheader("Directorio del Staff")
             if not df_users.empty:
-                event = st.dataframe(
-                    df_users[['nombre', 'usuario', 'rol']], 
-                    use_container_width=True, 
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row"
+                gb_users = GridOptionsBuilder.from_dataframe(df_users[['nombre', 'usuario', 'rol']])
+                gb_users.configure_selection('single')
+                go_users = gb_users.build()
+                
+                grid_users = AgGrid(
+                    df_users[['nombre', 'usuario', 'rol']],
+                    gridOptions=go_users,
+                    theme='streamlit',
+                    allow_unsafe_jscode=True,
+                    update_mode='selection_changed',
+                    fit_columns_on_grid_load=True
                 )
                 
-                if event and len(event.selection.rows) > 0:
-                    row_idx = event.selection.rows[0]
-                    usuario_seleccionado = df_users.iloc[row_idx]['usuario']
+                if grid_users['selected_rows'] is not None and len(grid_users['selected_rows']) > 0:
+                    # St_aggrid puede devolver un dict o DataFrame según versión, normalmente dict.
+                    sel_row = grid_users['selected_rows'][0]
+                    usuario_seleccionado = sel_row['usuario'] if isinstance(sel_row, dict) else sel_row.usuario
                     if st.session_state.get('user_sel_val') != usuario_seleccionado:
                         st.session_state.user_sel_val = usuario_seleccionado
                         st.rerun()
@@ -1200,15 +1209,16 @@ elif seleccion == "Gestión de Equipo (Admin)":
             if st.session_state.rol_sel_val in opciones_r:
                 idx_rol_sel = opciones_r.index(st.session_state.rol_sel_val)
                 
-            def on_rol_change():
-                st.session_state.rol_sel_val = st.session_state.rol_sel_widget
-
-            r_sel = st.selectbox("Acción", opciones_r, index=idx_rol_sel, key="rol_sel_widget", on_change=on_rol_change)
-            is_r_edit = st.session_state.rol_sel_val != "--- Crear Nuevo ---"
+            r_sel = st.selectbox("Acción", opciones_r, index=idx_rol_sel)
+            if r_sel != st.session_state.rol_sel_val:
+                st.session_state.rol_sel_val = r_sel
+                st.rerun()
+                
+            is_r_edit = r_sel != "--- Crear Nuevo ---"
             
             def_rn, def_rj, def_rperm = "", 5, []
             if is_r_edit:
-                r_row = df_roles[df_roles['nombre_rol'] == st.session_state.rol_sel_val].iloc[0]
+                r_row = df_roles[df_roles['nombre_rol'] == r_sel].iloc[0]
                 def_rn, def_rj = r_row['nombre_rol'], r_row['nivel_jerarquia']
                 import json
                 def_rperm = json.loads(r_row['permisos_json'])
@@ -1253,17 +1263,23 @@ elif seleccion == "Gestión de Equipo (Admin)":
         with col_rlist:
             st.subheader("Puestos Actuales")
             if not df_roles.empty:
-                event = st.dataframe(
-                    df_roles[['nombre_rol', 'nivel_jerarquia']], 
-                    use_container_width=True, 
-                    hide_index=True,
-                    on_select="rerun",
-                    selection_mode="single-row"
+                gb_roles = GridOptionsBuilder.from_dataframe(df_roles[['nombre_rol', 'nivel_jerarquia']])
+                gb_roles.configure_selection('single')
+                go_roles = gb_roles.build()
+                
+                grid_roles = AgGrid(
+                    df_roles[['nombre_rol', 'nivel_jerarquia']],
+                    gridOptions=go_roles,
+                    theme='streamlit',
+                    allow_unsafe_jscode=True,
+                    update_mode='selection_changed',
+                    fit_columns_on_grid_load=True
                 )
                 
-                if event and len(event.selection.rows) > 0:
-                    row_idx = event.selection.rows[0]
-                    rol_seleccionado = df_roles.iloc[row_idx]['nombre_rol']
+                if grid_roles['selected_rows'] is not None and len(grid_roles['selected_rows']) > 0:
+                    sel_row = grid_roles['selected_rows'][0]
+                    # Compatibilidad con pandas dataframe object / dict
+                    rol_seleccionado = sel_row['nombre_rol'] if isinstance(sel_row, dict) else sel_row.nombre_rol
                     if st.session_state.get('rol_sel_val') != rol_seleccionado:
                         st.session_state.rol_sel_val = rol_seleccionado
                         st.rerun()
