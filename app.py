@@ -1130,8 +1130,30 @@ elif seleccion == "Gestión de Equipo (Admin)":
                 st.warning("No hay roles creados.")
             
             if not df_users.empty:
-                # Supervisor no puede ser uno mismo
-                opciones_super = [("Ninguno", None)] + [(row['nombre'], row['id']) for _, row in df_users.iterrows() if not is_edit or row['usuario'] != user_sel]
+                # Determinar el nivel jerárquico del rol seleccionado
+                nivel_rol_actual = 999
+                if rol_sel and not df_roles.empty:
+                    match_rol = df_roles[df_roles['nombre_rol'] == rol_sel]
+                    if not match_rol.empty:
+                        nivel_rol_actual = match_rol['nivel_jerarquia'].values[0]
+
+                # Supervisor no puede ser uno mismo y debe tener un nivel jerárquico menor o igual (es decir, superior o igual jerárquicamente)
+                # OJO: La instrucción original de la tarea dice: "que su nivel_jerarquia sea un número menor o igual al nivel_jerarquia del rol"
+                # Y el usuario especificó luego que prefiere "solo a un nivel superior", es decir, estrictamente menor,
+                # pero vamos a usar "<=" si así es la jerarquía, o solo "<". Usaremos "<" para ser estrictos según la última respuesta del usuario ("que mejor sea solo a un nivel superior").
+
+                # Para cruzar la jerarquía del supervisor, combinamos df_users con df_roles
+                df_users_with_roles = df_users.merge(df_roles[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left', suffixes=('', '_rol'))
+
+                opciones_super = [("Ninguno", None)]
+                for _, row in df_users_with_roles.iterrows():
+                    # Supervisor no puede ser uno mismo
+                    if is_edit and row['usuario'] == user_sel:
+                        continue
+                    # Su nivel jerárquico debe ser estrictamente menor (más jerarquía)
+                    if pd.notna(row['nivel_jerarquia']) and row['nivel_jerarquia'] < nivel_rol_actual:
+                        opciones_super.append((row['nombre'], row['id']))
+
                 idx_sup = 0
                 for i, (_, s_id) in enumerate(opciones_super):
                     if s_id == def_rep:
@@ -1333,15 +1355,47 @@ elif seleccion == "Gestión de Equipo (Admin)":
     with tab_org:
         st.subheader("Organigrama del Despacho")
         if not df_users.empty and 'reporta_a_id' in df_users.columns:
-            # Crear nodos simples
-            org_data = []
+            import plotly.graph_objects as go
+
+            # Crear nodos para Treemap
+            ids = []
+            labels = []
+            parents = []
+
+            # IDs validos para verificar padres
+            valid_ids = df_users['id'].tolist()
+
             for _, r in df_users.iterrows():
-                sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) else ""
-                org_data.append({"Nombre": r['nombre'], "Puesto": r['rol'], "Reporta_A": sup_name})
+                u_id = str(r['id'])
+                ids.append(u_id)
+                # Formato solicitado: Nombre en negritas y Rol en cursivas
+                labels.append(f"<b>{r['nombre']}</b><br><i>{r['rol']}</i>")
+
+                # Manejo de padre
+                parent_id = r['reporta_a_id']
+                if pd.isna(parent_id) or parent_id not in valid_ids:
+                    parents.append("")
+                else:
+                    parents.append(str(int(parent_id)))
             
-            df_org = pd.DataFrame(org_data)
-            st.dataframe(df_org, use_container_width=True, hide_index=True)
-            st.info("💡 En una versión futura podemos integrar un gráfico interactivo (Ej. Treemap) usando Plotly con esta estructura.")
+            fig = go.Figure(go.Treemap(
+                ids=ids,
+                labels=labels,
+                parents=parents,
+                root_color="lightgrey"
+            ))
+            fig.update_layout(margin=dict(t=10, l=10, r=10, b=10))
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Ocultar la tabla preexistente
+            with st.expander("Ver Datos en Tabla"):
+                org_data = []
+                for _, r in df_users.iterrows():
+                    sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) and r['reporta_a_id'] in valid_ids else ""
+                    org_data.append({"Nombre": r['nombre'], "Puesto": r['rol'], "Reporta_A": sup_name})
+
+                df_org = pd.DataFrame(org_data)
+                st.dataframe(df_org, use_container_width=True, hide_index=True)
 
 if seleccion == "Descarga Masiva SAT (Simulador)":
     st.title("☁️ Conexión y Descarga Masiva del SAT")
