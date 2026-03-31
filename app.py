@@ -1087,6 +1087,8 @@ elif seleccion == "Gestión de Equipo (Admin)":
             
             if 'user_sel_val' not in st.session_state:
                 st.session_state.user_sel_val = "--- Crear Nuevo ---"
+            if 'last_grid_user' not in st.session_state:
+                st.session_state.last_grid_user = None
                 
             # Siempre recalcular el índice basado en la variable de estado
             idx_user = 0
@@ -1098,6 +1100,8 @@ elif seleccion == "Gestión de Equipo (Admin)":
             user_sel = st.selectbox("Seleccionar Acción", opciones_user, index=idx_user)
             if user_sel != st.session_state.user_sel_val:
                 st.session_state.user_sel_val = user_sel
+                # Si el usuario cambia manualmente el selectbox, olvidamos lo que seleccionó en la tabla
+                st.session_state.last_grid_user = None 
                 st.rerun()
             
             # Valores por defecto
@@ -1179,17 +1183,19 @@ elif seleccion == "Gestión de Equipo (Admin)":
                 )
                 
                 sel = grid_users['selected_rows']
+                usuario_seleccionado = None
                 if sel is not None:
                     if isinstance(sel, pd.DataFrame) and not sel.empty:
                         usuario_seleccionado = sel.iloc[0]['usuario']
-                        if st.session_state.get('user_sel_val') != usuario_seleccionado:
-                            st.session_state.user_sel_val = usuario_seleccionado
-                            st.rerun()
                     elif isinstance(sel, list) and len(sel) > 0:
                         usuario_seleccionado = sel[0]['usuario']
-                        if st.session_state.get('user_sel_val') != usuario_seleccionado:
-                            st.session_state.user_sel_val = usuario_seleccionado
-                            st.rerun()
+                        
+                # Solo reaccionamos si AgGrid tiene algo seleccionado Y ES DIFERENTE a lo último que nos dijo
+                if usuario_seleccionado and usuario_seleccionado != st.session_state.last_grid_user:
+                    st.session_state.last_grid_user = usuario_seleccionado
+                    if st.session_state.user_sel_val != usuario_seleccionado:
+                        st.session_state.user_sel_val = usuario_seleccionado
+                        st.rerun()
             else:
                 st.info("No hay usuarios registrados.")
                 
@@ -1209,6 +1215,8 @@ elif seleccion == "Gestión de Equipo (Admin)":
             
             if 'rol_sel_val' not in st.session_state:
                 st.session_state.rol_sel_val = "--- Crear Nuevo ---"
+            if 'last_grid_rol' not in st.session_state:
+                st.session_state.last_grid_rol = None
                 
             idx_rol_sel = 0
             if st.session_state.rol_sel_val in opciones_r:
@@ -1217,6 +1225,7 @@ elif seleccion == "Gestión de Equipo (Admin)":
             r_sel = st.selectbox("Acción", opciones_r, index=idx_rol_sel)
             if r_sel != st.session_state.rol_sel_val:
                 st.session_state.rol_sel_val = r_sel
+                st.session_state.last_grid_rol = None
                 st.rerun()
                 
             is_r_edit = r_sel != "--- Crear Nuevo ---"
@@ -1282,17 +1291,18 @@ elif seleccion == "Gestión de Equipo (Admin)":
                 )
                 
                 sel_r = grid_roles['selected_rows']
+                rol_seleccionado = None
                 if sel_r is not None:
                     if isinstance(sel_r, pd.DataFrame) and not sel_r.empty:
                         rol_seleccionado = sel_r.iloc[0]['nombre_rol']
-                        if st.session_state.get('rol_sel_val') != rol_seleccionado:
-                            st.session_state.rol_sel_val = rol_seleccionado
-                            st.rerun()
                     elif isinstance(sel_r, list) and len(sel_r) > 0:
                         rol_seleccionado = sel_r[0]['nombre_rol']
-                        if st.session_state.get('rol_sel_val') != rol_seleccionado:
-                            st.session_state.rol_sel_val = rol_seleccionado
-                            st.rerun()
+                        
+                if rol_seleccionado and rol_seleccionado != st.session_state.last_grid_rol:
+                    st.session_state.last_grid_rol = rol_seleccionado
+                    if st.session_state.rol_sel_val != rol_seleccionado:
+                        st.session_state.rol_sel_val = rol_seleccionado
+                        st.rerun()
             
     with tab_assign:
         st.subheader("Asignar Clientes a Empleados (Segregación de Datos)")
