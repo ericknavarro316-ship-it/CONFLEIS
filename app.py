@@ -1109,17 +1109,25 @@ elif seleccion == "Gestión de Equipo (Admin)":
             def_nom, def_usr, def_rol_id, def_rep = "", "", 2, None
             is_edit = user_sel != "--- Crear Nuevo ---"
             
+            def_estatus = "Activo"
             if is_edit:
                 u_row = df_users[df_users['usuario'] == user_sel].iloc[0]
                 def_nom, def_usr = u_row['nombre'], u_row['usuario']
                 def_rol_id = int(u_row['rol_id'])
                 def_rep = u_row['reporta_a_id']
+                def_estatus = u_row['estatus'] if 'estatus' in u_row and pd.notna(u_row['estatus']) else "Activo"
             
             nombre_u = st.text_input("Nombre Completo", value=def_nom)
             usuario_u = st.text_input("Usuario (Login)", value=def_usr, disabled=is_edit)
             pass_label = "Nueva Contraseña (Dejar en blanco para no cambiar)" if is_edit else "Contraseña"
             pass_u = st.text_input(pass_label, type="password")
             
+            # Selector de estatus
+            if is_edit:
+                estatus_u = st.selectbox("Estatus", ["Activo", "Inactivo"], index=0 if def_estatus == "Activo" else 1)
+            else:
+                estatus_u = "Activo" # Siempre Activo para nuevos
+
             # Opciones de rol y supervisor
             if not df_roles.empty:
                 nombres_roles = df_roles['nombre_rol'].tolist()
@@ -1170,13 +1178,21 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         s_id = int(s_id) if s_id is not None else None
 
                         if is_edit:
-                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None)
+                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None, estatus_u)
                             nuevo_usuario_id = int(u_row['id'])
+
+                            # Si se marcó como inactivo, reasignar sus subordinados a su jefe
+                            if estatus_u == "Inactivo" and def_estatus == "Activo":
+                                subordinados = db.obtener_subordinados_directos(nuevo_usuario_id)
+                                if subordinados:
+                                    nombres_movidos = db.reasignar_subordinados(s_id, subordinados)
+                                    nombres_str = ", ".join(nombres_movidos)
+                                    st.warning(f"Usuario inactivado. Se han reasignado automáticamente {len(subordinados)} subordinados ({nombres_str}) a su jefe inmediato.")
                         else:
                             if not pass_u:
                                 ok, msg = False, "Contraseña es requerida para nuevo usuario."
                             else:
-                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id)
+                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id, estatus_u)
                                 # Para asignar subordinados, necesitamos el ID del nuevo usuario
                                 if ok:
                                     nuevo_usuario_id = db.obtener_id_usuario_por_login(usuario_u)
@@ -1209,10 +1225,9 @@ elif seleccion == "Gestión de Equipo (Admin)":
 
                                 # Actualizar esos subordinados para que reporten a nuevo_usuario_id
                                 if subordinados_a_mover:
-
-                                    db.reasignar_subordinados(nuevo_usuario_id, subordinados_a_mover)
-
-                                    st.success(f"¡Se auto-asignaron {len(subordinados_a_mover)} subordinados al nuevo/editado perfil debido a puente jerárquico!")
+                                    nombres_movidos = db.reasignar_subordinados(nuevo_usuario_id, subordinados_a_mover)
+                                    nombres_str = ", ".join(nombres_movidos)
+                                    st.success(f"¡Puente jerárquico! Se auto-asignaron {len(subordinados_a_mover)} subordinados a este perfil: {nombres_str}.")
 
                             st.success(msg)
                             import time
@@ -1390,39 +1405,91 @@ elif seleccion == "Gestión de Equipo (Admin)":
         st.subheader("Organigrama del Despacho")
         if not df_users.empty and 'reporta_a_id' in df_users.columns:
             import graphviz
+            import html
+
+            # Solo consideramos usuarios Activos
+            df_activos = df_users[df_users['estatus'] == 'Activo'] if 'estatus' in df_users.columns else df_users
+
+            # Filtro de líder
+            opciones_lider = ["-- Toda la Empresa --"] + df_activos['nombre'].tolist()
+            lider_seleccionado = st.selectbox("Filtrar por rama de líder:", opciones_lider)
+
+            # Lógica recursiva para obtener solo a los subordinados de esa rama
+            valid_ids_org = set()
+            if lider_seleccionado == "-- Toda la Empresa --":
+                valid_ids_org = set(df_activos['id'].tolist())
+            else:
+                id_lider = df_activos[df_activos['nombre'] == lider_seleccionado]['id'].values[0]
+
+                # Función recursiva para encontrar descendencia
+                def obtener_descendencia(parent_id, current_set):
+                    current_set.add(parent_id)
+                    hijos = df_activos[df_activos['reporta_a_id'] == parent_id]['id'].tolist()
+                    for hijo_id in hijos:
+                        obtener_descendencia(hijo_id, current_set)
+
+                obtener_descendencia(id_lider, valid_ids_org)
+
+            # Filtrar dataframe a graficar
+            df_graficar = df_activos[df_activos['id'].isin(valid_ids_org)]
+
+            # Cruce con roles para obtener nivel de jerarquía (y decidir color)
+            if not df_roles.empty:
+                df_graficar = df_graficar.merge(df_roles[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left')
+            else:
+                df_graficar['nivel_jerarquia'] = 5 # Default si no hay roles
+
+            # Colores base según jerarquía
+            def obtener_color_por_jerarquia(nivel):
+                # Tonos de azul y verde
+                colores = {
+                    1: '#1E3A8A', # Nivel 1 (Director) - Azul oscuro
+                    2: '#2563EB', # Nivel 2 - Azul brillante
+                    3: '#3B82F6', # Nivel 3 - Azul normal
+                    4: '#059669', # Nivel 4 - Verde oscuro
+                    5: '#10B981', # Nivel 5 - Verde
+                    6: '#34D399', # Nivel 6 - Verde claro
+                }
+                # Para niveles mayores o desconocidos, gris oscuro
+                return colores.get(nivel, '#4B5563')
 
             # Crear grafo jerárquico
             dot = graphviz.Digraph(comment='Organigrama')
-            dot.attr('node', shape='box', style='filled', color='lightgrey', fontname='Helvetica')
+            dot.attr('node', shape='box', style='filled', fontname='Helvetica', fontcolor='white')
             dot.attr('edge', arrowhead='vee', color='#666666')
 
-            valid_ids = df_users['id'].tolist()
-
             # Añadir nodos
-            for _, r in df_users.iterrows():
-                u_id = str(r['id'])
-                # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres especiales
-                import html
+            for _, r in df_graficar.iterrows():
+                u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
+                nivel = r['nivel_jerarquia'] if pd.notna(r['nivel_jerarquia']) else 5
+
+                # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres
                 safe_nombre = html.escape(r['nombre'])
                 safe_rol = html.escape(r['rol'])
                 label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I>>"
-                dot.node(u_id, label)
+
+                color_nodo = obtener_color_por_jerarquia(nivel)
+                dot.node(u_id, label, fillcolor=color_nodo)
 
             # Añadir bordes (conexiones jerárquicas)
-            for _, r in df_users.iterrows():
-                u_id = str(r['id'])
+            for _, r in df_graficar.iterrows():
+                u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
                 parent_id = r['reporta_a_id']
-                if pd.notna(parent_id) and parent_id in valid_ids:
+                if pd.notna(parent_id) and parent_id in valid_ids_org:
                     # El padre apunta al hijo
                     dot.edge(str(int(parent_id)), u_id)
-            
+
             st.graphviz_chart(dot, use_container_width=True)
 
             # Ocultar la tabla preexistente
             with st.expander("Ver Datos en Tabla"):
                 org_data = []
+                valid_ids_table = df_users['id'].tolist()
+
                 for _, r in df_users.iterrows():
-                    sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) and r['reporta_a_id'] in valid_ids else ""
+
+                    sup_name = df_users[df_users['id'] == r['reporta_a_id']]['nombre'].values[0] if pd.notna(r['reporta_a_id']) and r['reporta_a_id'] in valid_ids_table else ""
+
                     org_data.append({"Nombre": r['nombre'], "Puesto": r['rol'], "Reporta_A": sup_name})
 
                 df_org = pd.DataFrame(org_data)
