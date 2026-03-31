@@ -1178,13 +1178,18 @@ elif seleccion == "Gestión de Equipo (Admin)":
                     fit_columns_on_grid_load=True
                 )
                 
-                if grid_users['selected_rows'] is not None and len(grid_users['selected_rows']) > 0:
-                    # St_aggrid puede devolver un dict o DataFrame según versión, normalmente dict.
-                    sel_row = grid_users['selected_rows'][0]
-                    usuario_seleccionado = sel_row['usuario'] if isinstance(sel_row, dict) else sel_row.usuario
-                    if st.session_state.get('user_sel_val') != usuario_seleccionado:
-                        st.session_state.user_sel_val = usuario_seleccionado
-                        st.rerun()
+                sel = grid_users['selected_rows']
+                if sel is not None:
+                    if isinstance(sel, pd.DataFrame) and not sel.empty:
+                        usuario_seleccionado = sel.iloc[0]['usuario']
+                        if st.session_state.get('user_sel_val') != usuario_seleccionado:
+                            st.session_state.user_sel_val = usuario_seleccionado
+                            st.rerun()
+                    elif isinstance(sel, list) and len(sel) > 0:
+                        usuario_seleccionado = sel[0]['usuario']
+                        if st.session_state.get('user_sel_val') != usuario_seleccionado:
+                            st.session_state.user_sel_val = usuario_seleccionado
+                            st.rerun()
             else:
                 st.info("No hay usuarios registrados.")
                 
@@ -1276,13 +1281,18 @@ elif seleccion == "Gestión de Equipo (Admin)":
                     fit_columns_on_grid_load=True
                 )
                 
-                if grid_roles['selected_rows'] is not None and len(grid_roles['selected_rows']) > 0:
-                    sel_row = grid_roles['selected_rows'][0]
-                    # Compatibilidad con pandas dataframe object / dict
-                    rol_seleccionado = sel_row['nombre_rol'] if isinstance(sel_row, dict) else sel_row.nombre_rol
-                    if st.session_state.get('rol_sel_val') != rol_seleccionado:
-                        st.session_state.rol_sel_val = rol_seleccionado
-                        st.rerun()
+                sel_r = grid_roles['selected_rows']
+                if sel_r is not None:
+                    if isinstance(sel_r, pd.DataFrame) and not sel_r.empty:
+                        rol_seleccionado = sel_r.iloc[0]['nombre_rol']
+                        if st.session_state.get('rol_sel_val') != rol_seleccionado:
+                            st.session_state.rol_sel_val = rol_seleccionado
+                            st.rerun()
+                    elif isinstance(sel_r, list) and len(sel_r) > 0:
+                        rol_seleccionado = sel_r[0]['nombre_rol']
+                        if st.session_state.get('rol_sel_val') != rol_seleccionado:
+                            st.session_state.rol_sel_val = rol_seleccionado
+                            st.rerun()
             
     with tab_assign:
         st.subheader("Asignar Clientes a Empleados (Segregación de Datos)")
