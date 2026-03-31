@@ -343,6 +343,22 @@ def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=N
     finally:
         conn.close()
 
+def obtener_id_usuario_por_login(usuario_login):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM usuarios_despacho WHERE usuario=?", (usuario_login,))
+    res = cursor.fetchone()
+    conn.close()
+    return res[0] if res else None
+
+def reasignar_subordinados(nuevo_supervisor_id, subordinados_ids):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    for sub_id in subordinados_ids:
+        cursor.execute("UPDATE usuarios_despacho SET reporta_a_id = ? WHERE id = ?", (nuevo_supervisor_id, sub_id))
+    conn.commit()
+    conn.close()
+
 def actualizar_usuario_despacho(user_id, nombre, usuario, rol_id, reporta_a_id=None, nueva_contrasena=None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()

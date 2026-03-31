@@ -1138,9 +1138,6 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         nivel_rol_actual = match_rol['nivel_jerarquia'].values[0]
 
                 # Supervisor no puede ser uno mismo y debe tener un nivel jerárquico menor o igual (es decir, superior o igual jerárquicamente)
-                # OJO: La instrucción original de la tarea dice: "que su nivel_jerarquia sea un número menor o igual al nivel_jerarquia del rol"
-                # Y el usuario especificó luego que prefiere "solo a un nivel superior", es decir, estrictamente menor,
-                # pero vamos a usar "<=" si así es la jerarquía, o solo "<". Usaremos "<" para ser estrictos según la última respuesta del usuario ("que mejor sea solo a un nivel superior").
 
                 # Para cruzar la jerarquía del supervisor, combinamos df_users con df_roles
                 df_users_with_roles = df_users.merge(df_roles[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left', suffixes=('', '_rol'))
@@ -1174,12 +1171,49 @@ elif seleccion == "Gestión de Equipo (Admin)":
 
                         if is_edit:
                             ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None)
+                            nuevo_usuario_id = int(u_row['id'])
                         else:
                             if not pass_u:
                                 ok, msg = False, "Contraseña es requerida para nuevo usuario."
                             else:
                                 ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id)
+                                # Para asignar subordinados, necesitamos el ID del nuevo usuario
+                                if ok:
+                                    nuevo_usuario_id = db.obtener_id_usuario_por_login(usuario_u)
+
                         if ok: 
+                            # Lógica de autoasignación de subordinados:
+                            # Si este usuario tiene un supervisor (s_id), y el nivel jerárquico de este usuario (nivel_rol_actual)
+                            # es mayor (es decir, menos jerarquía) que el del supervisor.
+                            # Debemos buscar quiénes le reportaban a ese supervisor (s_id) pero que tengan un nivel jerárquico MAYOR que el nivel_rol_actual.
+                            # Y pasárselos a que reporten a este nuevo usuario.
+                            roles_changed = not is_edit or int(u_row['rol_id']) != r_id
+
+                            sup_changed = not is_edit or u_row['reporta_a_id'] != s_id
+
+                            if (roles_changed or sup_changed) and s_id is not None and nuevo_usuario_id:
+                                # nivel_rol_actual ya está definido arriba: es el nivel jerárquico del rol que se acaba de guardar.
+                                df_actualizado = db.obtener_usuarios_despacho()
+                                df_roles_act = db.obtener_roles()
+                                df_combinado = df_actualizado.merge(df_roles_act[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left')
+
+                                subordinados_a_mover = []
+                                # Buscamos usuarios que actualmente reporten al jefe directo de este usuario (s_id)
+                                for _, sub_row in df_combinado.iterrows():
+                                    # Importante: No mover al usuario que acabamos de editar, ni a otros con igual o más jerarquía (nivel menor o igual)
+                                    if sub_row['reporta_a_id'] == s_id and sub_row['id_x'] != nuevo_usuario_id:
+                                        nivel_sub = sub_row['nivel_jerarquia']
+                                        # Si el subordinado tiene más nivel (menos jerarquía, es decir, un número mayor)
+                                        if pd.notna(nivel_sub) and nivel_sub > nivel_rol_actual:
+                                            subordinados_a_mover.append(int(sub_row['id_x'])) # id_x es el id del usuario por el merge
+
+                                # Actualizar esos subordinados para que reporten a nuevo_usuario_id
+                                if subordinados_a_mover:
+
+                                    db.reasignar_subordinados(nuevo_usuario_id, subordinados_a_mover)
+
+                                    st.success(f"¡Se auto-asignaron {len(subordinados_a_mover)} subordinados al nuevo/editado perfil debido a puente jerárquico!")
+
                             st.success(msg)
                             import time
                             time.sleep(1.5)
@@ -1355,37 +1389,34 @@ elif seleccion == "Gestión de Equipo (Admin)":
     with tab_org:
         st.subheader("Organigrama del Despacho")
         if not df_users.empty and 'reporta_a_id' in df_users.columns:
-            import plotly.graph_objects as go
+            import graphviz
 
-            # Crear nodos para Treemap
-            ids = []
-            labels = []
-            parents = []
+            # Crear grafo jerárquico
+            dot = graphviz.Digraph(comment='Organigrama')
+            dot.attr('node', shape='box', style='filled', color='lightgrey', fontname='Helvetica')
+            dot.attr('edge', arrowhead='vee', color='#666666')
 
-            # IDs validos para verificar padres
             valid_ids = df_users['id'].tolist()
 
+            # Añadir nodos
             for _, r in df_users.iterrows():
                 u_id = str(r['id'])
-                ids.append(u_id)
-                # Formato solicitado: Nombre en negritas y Rol en cursivas
-                labels.append(f"<b>{r['nombre']}</b><br><i>{r['rol']}</i>")
+                # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres especiales
+                import html
+                safe_nombre = html.escape(r['nombre'])
+                safe_rol = html.escape(r['rol'])
+                label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I>>"
+                dot.node(u_id, label)
 
-                # Manejo de padre
+            # Añadir bordes (conexiones jerárquicas)
+            for _, r in df_users.iterrows():
+                u_id = str(r['id'])
                 parent_id = r['reporta_a_id']
-                if pd.isna(parent_id) or parent_id not in valid_ids:
-                    parents.append("")
-                else:
-                    parents.append(str(int(parent_id)))
+                if pd.notna(parent_id) and parent_id in valid_ids:
+                    # El padre apunta al hijo
+                    dot.edge(str(int(parent_id)), u_id)
             
-            fig = go.Figure(go.Treemap(
-                ids=ids,
-                labels=labels,
-                parents=parents,
-                root_color="lightgrey"
-            ))
-            fig.update_layout(margin=dict(t=10, l=10, r=10, b=10))
-            st.plotly_chart(fig, use_container_width=True)
+            st.graphviz_chart(dot, use_container_width=True)
 
             # Ocultar la tabla preexistente
             with st.expander("Ver Datos en Tabla"):
