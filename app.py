@@ -1187,37 +1187,6 @@ elif seleccion == "Gestión de Equipo (Admin)":
                 rol_sel = None
                 st.warning("No hay roles creados.")
             
-            if not df_users.empty:
-                # Determinar el nivel jerárquico del rol seleccionado
-                nivel_rol_actual = 999
-                if rol_sel and not df_roles.empty:
-                    match_rol = df_roles[df_roles['nombre_rol'] == rol_sel]
-                    if not match_rol.empty:
-                        nivel_rol_actual = match_rol['nivel_jerarquia'].values[0]
-
-                # Supervisor no puede ser uno mismo y debe tener un nivel jerárquico menor o igual (es decir, superior o igual jerárquicamente)
-
-                # Para cruzar la jerarquía del supervisor, combinamos df_users con df_roles
-                df_users_with_roles = df_users.merge(df_roles[['id', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left', suffixes=('', '_rol'))
-
-                opciones_super = [("Ninguno", None)]
-                for _, row in df_users_with_roles.iterrows():
-                    # Supervisor no puede ser uno mismo
-                    if is_edit and row['usuario'] == user_sel:
-                        continue
-                    # Su nivel jerárquico debe ser estrictamente menor (más jerarquía)
-                    if pd.notna(row['nivel_jerarquia']) and row['nivel_jerarquia'] < nivel_rol_actual:
-                        opciones_super.append((row['nombre'], row['id']))
-
-                idx_sup = 0
-                for i, (_, s_id) in enumerate(opciones_super):
-                    if s_id == def_rep:
-                        idx_sup = i
-                        break
-                sup_sel = st.selectbox("Reporta a (Supervisor)", [x[0] for x in opciones_super], index=idx_sup)
-            else:
-                sup_sel = "Ninguno"
-            
             departamentos = db.obtener_departamentos()
             opciones_deptos = ["Ninguno"] + departamentos['nombre'].tolist() if not departamentos.empty else ["Ninguno"]
             def_depto_nombre = "Ninguno"
@@ -1229,6 +1198,53 @@ elif seleccion == "Gestión de Equipo (Admin)":
 
             idx_depto = opciones_deptos.index(def_depto_nombre) if def_depto_nombre in opciones_deptos else 0
             depto_sel = st.selectbox("Departamento", opciones_deptos, index=idx_depto)
+
+            if not df_users.empty:
+                # Determinar el nivel jerárquico del rol seleccionado
+                nivel_rol_actual = 999
+                if rol_sel and not df_roles.empty:
+                    match_rol = df_roles[df_roles['nombre_rol'] == rol_sel]
+                    if not match_rol.empty:
+                        nivel_rol_actual = match_rol['nivel_jerarquia'].values[0]
+
+                # Supervisor no puede ser uno mismo y debe tener un nivel jerárquico menor o igual (es decir, superior o igual jerárquicamente)
+
+                # Para cruzar la jerarquía del supervisor, combinamos df_users con df_roles
+                df_users_with_roles = df_users.merge(df_roles[['id', 'nombre_rol', 'nivel_jerarquia']], left_on='rol_id', right_on='id', how='left', suffixes=('', '_rol'))
+
+                opciones_super = [("Ninguno", None)]
+                for _, row in df_users_with_roles.iterrows():
+                    # Supervisor no puede ser uno mismo
+                    if is_edit and row['usuario'] == user_sel:
+                        continue
+
+                    # Filtro de Departamento
+                    depto_row_id = row.get('departamento_id')
+                    is_same_dept = False
+                    is_admin_director = False
+
+                    if pd.notna(depto_row_id):
+                        match_depto_row = departamentos[departamentos['id'] == int(depto_row_id)]
+                        if not match_depto_row.empty and match_depto_row['nombre'].values[0] == depto_sel:
+                            is_same_dept = True
+
+                    if pd.notna(row['nombre_rol']) and ("Admin" in str(row['nombre_rol']) or "Director" in str(row['nombre_rol'])):
+                        is_admin_director = True
+
+                    # Su nivel jerárquico debe ser estrictamente menor (más jerarquía)
+                    # Y debe pertenecer al mismo departamento o ser Admin/Director
+                    if pd.notna(row['nivel_jerarquia']) and row['nivel_jerarquia'] < nivel_rol_actual:
+                        if is_same_dept or is_admin_director or depto_sel == "Ninguno":
+                            opciones_super.append((row['nombre'], row['id']))
+
+                idx_sup = 0
+                for i, (_, s_id) in enumerate(opciones_super):
+                    if s_id == def_rep:
+                        idx_sup = i
+                        break
+                sup_sel = st.selectbox("Reporta a (Supervisor)", [x[0] for x in opciones_super], index=idx_sup)
+            else:
+                sup_sel = "Ninguno"
 
             if st.button("Guardar Usuario", type="primary"):
                     if nombre_u and usuario_u and rol_sel:
