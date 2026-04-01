@@ -488,40 +488,75 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
         pdf_file = st.file_uploader("Subir Constancia (PDF)", type=["pdf"])
         
         default_rfc, default_nombre, default_regimen = "", "", ""
+        default_cp, default_curp, default_actividad = "", "", ""
+        default_fecha_inicio, default_estatus = "", ""
         
         if pdf_file is not None:
              datos_extraidos, msj = pex.extraer_datos_constancia(pdf_file)
-             if datos_extraidos["rfc"]:
+             if datos_extraidos.get("rfc"):
                  st.success("¡Datos extraídos de la Constancia con éxito!")
+
+                 if datos_extraidos.get("fecha_generacion"):
+                     st.info(f"📅 **Constancia generada el:** {datos_extraidos['fecha_generacion']}")
+
                  default_rfc = datos_extraidos.get("rfc", "")
                  default_nombre = datos_extraidos.get("nombre", "")
                  default_regimen = datos_extraidos.get("regimen", "")
-                 if datos_extraidos.get("tipo_persona") != tipo_persona:
+                 default_cp = datos_extraidos.get("codigo_postal", "")
+                 default_curp = datos_extraidos.get("curp", "")
+                 default_actividad = datos_extraidos.get("actividad_economica", "")
+                 default_fecha_inicio = datos_extraidos.get("fecha_inicio_operaciones", "")
+                 default_estatus = datos_extraidos.get("estatus_padron", "")
+
+                 if datos_extraidos.get("tipo_persona") and datos_extraidos.get("tipo_persona") != tipo_persona:
                       st.warning(f"¡Atención! El RFC indica que es Persona {datos_extraidos.get('tipo_persona')}.")
              else:
                  st.error("No se pudieron extraer datos del PDF.")
 
         with st.form(f"nuevo_cliente_{tipo_persona}"):
-            nombre = st.text_input("Nombre / Razón Social *", value=default_nombre)
-            rfc = st.text_input("RFC *", value=default_rfc)
-            
-            if tipo_persona == "Física":
-                regimenes = ["Sueldos y Salarios", "Actividad Empresarial y Profesional", "Régimen Simplificado de Confianza (RESICO)", "Arrendamiento", "Plataformas Tecnológicas", "Otro"]
-            else:
-                regimenes = ["Persona Moral - Régimen General", "Persona Moral - RESICO", "Organización Sin Fines de Lucro", "Otro"]
-            
-            try:
-                reg_index = regimenes.index(default_regimen) if default_regimen in regimenes else 0
-            except ValueError:
-                reg_index = 0
+            st.markdown("##### 📌 Datos Principales")
+            col_p1, col_p2 = st.columns(2)
+            with col_p1:
+                nombre = st.text_input("Nombre / Razón Social *", value=default_nombre)
+                rfc = st.text_input("RFC *", value=default_rfc)
+                if tipo_persona == "Física":
+                    curp = st.text_input("CURP", value=default_curp)
+                else:
+                    curp = ""
+            with col_p2:
+                if tipo_persona == "Física":
+                    regimenes = ["Sueldos y Salarios", "Actividad Empresarial y Profesional", "Régimen Simplificado de Confianza (RESICO)", "Arrendamiento", "Plataformas Tecnológicas", "Otro"]
+                else:
+                    regimenes = ["Persona Moral - Régimen General", "Persona Moral - RESICO", "Organización Sin Fines de Lucro", "Otro"]
                 
-            regimen = st.selectbox("Régimen Fiscal Principal", regimenes, index=reg_index)
-            email = st.text_input("Correo Electrónico")
-            telefono = st.text_input("Teléfono")
+                try:
+                    reg_index = regimenes.index(default_regimen) if default_regimen in regimenes else 0
+                except ValueError:
+                    reg_index = 0
 
-            departamentos = db.obtener_departamentos()
-            opciones_srv = ["Ninguno"] + departamentos['nombre'].tolist() if not departamentos.empty else ["Ninguno"]
-            srv_sel = st.selectbox("Servicio Principal (Departamento)", opciones_srv)
+                regimen = st.selectbox("Régimen Fiscal Principal", regimenes, index=reg_index)
+                if default_regimen and default_regimen not in regimenes:
+                     st.caption(f"Leído del PDF: *{default_regimen}*")
+
+                codigo_postal = st.text_input("Código Postal", value=default_cp)
+                estatus_padron = st.text_input("Estatus en el Padrón", value=default_estatus)
+
+            st.markdown("##### 🏢 Datos Operativos")
+            col_o1, col_o2 = st.columns(2)
+            with col_o1:
+                actividad_economica = st.text_area("Actividad Económica", value=default_actividad, height=68)
+            with col_o2:
+                fecha_inicio_operaciones = st.text_input("Fecha Inicio Operaciones", value=default_fecha_inicio)
+
+            st.markdown("##### 📞 Contacto y Configuración")
+            col_c1, col_c2 = st.columns(2)
+            with col_c1:
+                email = st.text_input("Correo Electrónico")
+                telefono = st.text_input("Teléfono")
+            with col_c2:
+                departamentos = db.obtener_departamentos()
+                opciones_srv = ["Ninguno"] + departamentos['nombre'].tolist() if not departamentos.empty else ["Ninguno"]
+                srv_sel = st.selectbox("Servicio Principal (Departamento)", opciones_srv)
 
             enviar = st.form_submit_button("Guardar Cliente")
             
@@ -532,7 +567,14 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
                     srv_id = None
                     if srv_sel != "Ninguno":
                         srv_id = int(departamentos[departamentos['nombre'] == srv_sel]['id'].values[0])
-                    exito, mensaje = db.agregar_cliente(nombre, rfc.upper(), tipo_persona, regimen, email, telefono, servicio_principal_id=srv_id)
+                    exito, mensaje = db.agregar_cliente(
+                        nombre, rfc.upper(), tipo_persona, regimen, email, telefono,
+                        servicio_principal_id=srv_id,
+                        codigo_postal=codigo_postal, curp=curp,
+                        actividad_economica=actividad_economica,
+                        fecha_inicio_operaciones=fecha_inicio_operaciones,
+                        estatus_padron=estatus_padron
+                    )
                     if exito:
                         st.success(mensaje)
                         st.rerun()
