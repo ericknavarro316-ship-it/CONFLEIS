@@ -104,7 +104,8 @@ if not st.session_state.logged_in_staff and not st.session_state.logged_in_clien
                     'id': staff_data[0], 
                     'nombre': staff_data[1], 
                     'rol': staff_data[2], 
-                    'permisos': staff_data[3]
+                    'permisos': staff_data[3],
+                    'departamento_id': staff_data[4] if len(staff_data) > 4 else None
                 }
                 st.success(f"Bienvenido {staff_data[1]} ({staff_data[2]})")
                 st.rerun()
@@ -365,6 +366,47 @@ elif seleccion == "Dashboard":
         st.metric(label="Físicas / Morales", value=f"{total_fisicas} / {total_morales}")
         
     st.write("---")
+    st.subheader("Carga de Trabajo por Departamento")
+    departamentos = db.obtener_departamentos()
+    if not departamentos.empty:
+        col_pie, col_bar = st.columns(2)
+        import plotly.express as px
+
+        with col_pie:
+            if not clientes_df.empty and 'servicio_principal_id' in clientes_df.columns:
+                cli_dept = clientes_df.merge(departamentos, left_on='servicio_principal_id', right_on='id', how='left')
+                cli_dept['nombre_y'] = cli_dept['nombre_y'].fillna('Sin Asignar')
+                pie_data = cli_dept['nombre_y'].value_counts().reset_index()
+                pie_data.columns = ['Departamento', 'Total Clientes']
+                fig_pie = px.pie(pie_data, values='Total Clientes', names='Departamento', title="Clientes por Servicio Principal", hole=0.4)
+                st.plotly_chart(fig_pie, use_container_width=True)
+            else:
+                st.info("No hay datos de clientes para mostrar.")
+
+        with col_bar:
+            tareas_df = db.obtener_tareas_kanban()
+            usuarios_df = db.obtener_usuarios_despacho()
+            if not tareas_df.empty and not usuarios_df.empty:
+                # Filtrar tareas activas (no Completadas)
+                tareas_activas = tareas_df[tareas_df['columna'] != 'Completado']
+                if not tareas_activas.empty:
+                    # Merge para obtener el departamento_id del usuario
+                    tareas_usr = tareas_activas.merge(usuarios_df[['id', 'departamento_id']], left_on='asignado_a_id', right_on='id', how='left')
+                    # Merge para obtener el nombre del departamento
+                    tareas_dept = tareas_usr.merge(departamentos[['id', 'nombre']], left_on='departamento_id', right_on='id', how='left')
+                    tareas_dept['nombre'] = tareas_dept['nombre'].fillna('Sin Asignar')
+                    bar_data = tareas_dept['nombre'].value_counts().reset_index()
+                    bar_data.columns = ['Departamento', 'Tareas Activas']
+                    fig_bar = px.bar(bar_data, x='Departamento', y='Tareas Activas', title="Tareas Activas por Departamento")
+                    st.plotly_chart(fig_bar, use_container_width=True)
+                else:
+                    st.info("No hay tareas activas en el tablero.")
+            else:
+                st.info("No hay datos de tareas o usuarios.")
+    else:
+        st.info("Crea departamentos para ver las métricas por área.")
+
+    st.write("---")
     st.subheader("⚠️ Alertas de Obligaciones Próximas o Vencidas")
     if not obligaciones_df.empty:
         ob_semaforo = calcular_semaforo(obligaciones_df)
@@ -476,13 +518,21 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
             regimen = st.selectbox("Régimen Fiscal Principal", regimenes, index=reg_index)
             email = st.text_input("Correo Electrónico")
             telefono = st.text_input("Teléfono")
+
+            departamentos = db.obtener_departamentos()
+            opciones_srv = ["Ninguno"] + departamentos['nombre'].tolist() if not departamentos.empty else ["Ninguno"]
+            srv_sel = st.selectbox("Servicio Principal (Departamento)", opciones_srv)
+
             enviar = st.form_submit_button("Guardar Cliente")
             
             if enviar:
                 if not nombre or not rfc:
                     st.error("Los campos Nombre y RFC son obligatorios.")
                 else:
-                    exito, mensaje = db.agregar_cliente(nombre, rfc.upper(), tipo_persona, regimen, email, telefono)
+                    srv_id = None
+                    if srv_sel != "Ninguno":
+                        srv_id = int(departamentos[departamentos['nombre'] == srv_sel]['id'].values[0])
+                    exito, mensaje = db.agregar_cliente(nombre, rfc.upper(), tipo_persona, regimen, email, telefono, servicio_principal_id=srv_id)
                     if exito:
                         st.success(mensaje)
                         st.rerun()
@@ -1072,7 +1122,7 @@ elif seleccion == "Control de Honorarios":
 
 elif seleccion == "Gestión de Equipo (Admin)":
     st.title("👥 Gestión de Equipo (Roles y Accesos)")
-    tab_users, tab_roles, tab_assign, tab_org, tab_bitacora = st.tabs(["Usuarios", "Roles y Permisos", "Asignación de Clientes", "Organigrama", "Bitácora (Log)"])
+    tab_users, tab_roles, tab_deptos, tab_assign, tab_org, tab_bitacora = st.tabs(["Usuarios", "Roles y Permisos", "Departamentos", "Asignación de Clientes", "Organigrama", "Bitácora (Log)"])
     
     with tab_users:
         col_new, col_list = st.columns([1, 2])
@@ -1168,17 +1218,33 @@ elif seleccion == "Gestión de Equipo (Admin)":
             else:
                 sup_sel = "Ninguno"
             
+            departamentos = db.obtener_departamentos()
+            opciones_deptos = ["Ninguno"] + departamentos['nombre'].tolist() if not departamentos.empty else ["Ninguno"]
+            def_depto_nombre = "Ninguno"
+            if is_edit and 'departamento_id' in u_row and pd.notna(u_row['departamento_id']):
+                depto_id = int(u_row['departamento_id'])
+                match = departamentos[departamentos['id'] == depto_id]
+                if not match.empty:
+                    def_depto_nombre = match['nombre'].values[0]
+
+            idx_depto = opciones_deptos.index(def_depto_nombre) if def_depto_nombre in opciones_deptos else 0
+            depto_sel = st.selectbox("Departamento", opciones_deptos, index=idx_depto)
+
             if st.button("Guardar Usuario", type="primary"):
                     if nombre_u and usuario_u and rol_sel:
                         r_id = df_roles[df_roles['nombre_rol'] == rol_sel]['id'].values[0]
                         s_id = next((s_id for s_name, s_id in opciones_super if s_name == sup_sel), None) if not df_users.empty else None
                         
+                        d_id = None
+                        if depto_sel != "Ninguno":
+                            d_id = int(departamentos[departamentos['nombre'] == depto_sel]['id'].values[0])
+
                         # Convertir tipos de numpy a tipos nativos de python si es necesario
                         r_id = int(r_id)
                         s_id = int(s_id) if s_id is not None else None
 
                         if is_edit:
-                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None, estatus_u)
+                            ok, msg = db.actualizar_usuario_despacho(int(u_row['id']), nombre_u, usuario_u, r_id, s_id, pass_u if pass_u else None, estatus_u, departamento_id=d_id)
                             nuevo_usuario_id = int(u_row['id'])
 
                             # Si se marcó como inactivo, reasignar sus subordinados a su jefe
@@ -1197,7 +1263,7 @@ elif seleccion == "Gestión de Equipo (Admin)":
                             if not pass_u:
                                 ok, msg = False, "Contraseña es requerida para nuevo usuario."
                             else:
-                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id, estatus_u)
+                                ok, msg = db.agregar_usuario_despacho(nombre_u, usuario_u, pass_u, r_id, s_id, estatus_u, departamento_id=d_id)
                                 # Para asignar subordinados, necesitamos el ID del nuevo usuario
                                 if ok:
                                     nuevo_usuario_id = db.obtener_id_usuario_por_login(usuario_u)
@@ -1384,8 +1450,80 @@ elif seleccion == "Gestión de Equipo (Admin)":
                         st.session_state.rol_sel_val = rol_seleccionado
                         st.rerun()
             
+
+    with tab_deptos:
+        st.subheader("🏢 Gestión de Departamentos")
+        col_d_new, col_d_list = st.columns([1, 2])
+
+        with col_d_new:
+            st.markdown("#### Nuevo Departamento")
+            with st.form("form_depto"):
+                nom_d = st.text_input("Nombre del Departamento")
+                desc_d = st.text_area("Descripción")
+                if st.form_submit_button("Agregar"):
+                    if nom_d:
+                        ok, m = db.agregar_departamento(nom_d, desc_d)
+                        if ok: st.success(m); st.rerun()
+                        else: st.error(m)
+                    else:
+                        st.warning("Nombre requerido.")
+
+        with col_d_list:
+            st.markdown("#### Departamentos Existentes")
+            df_deptos = db.obtener_departamentos()
+            if not df_deptos.empty:
+                st.dataframe(df_deptos, use_container_width=True, hide_index=True)
+
+                # Delete logic
+                del_id = st.selectbox("Eliminar Departamento", df_deptos['id'].tolist(), format_func=lambda x: df_deptos[df_deptos['id']==x]['nombre'].values[0])
+                if st.button("🗑️ Eliminar"):
+                    ok, m = db.eliminar_departamento(del_id)
+                    if ok: st.success(m); st.rerun()
+                    else: st.error(m)
+            else:
+                st.info("No hay departamentos.")
+
+
     with tab_assign:
         st.subheader("Asignar Clientes a Empleados (Segregación de Datos)")
+
+        # Sugerencias Inteligentes
+        with st.expander("💡 Sugerencias de Asignación Inteligente"):
+            st.markdown("Basado en el Servicio Principal del cliente y la carga de trabajo actual de los empleados del mismo departamento.")
+
+            df_clientes = db.obtener_clientes()
+            if not df_clientes.empty and not df_users.empty and 'servicio_principal_id' in df_clientes.columns and 'departamento_id' in df_users.columns:
+
+                clientes_no_asignados = []
+                # Simple check for unassigned
+                # A client might be assigned to multiple, let's just find best match for any client
+                # Or specifically clients without assignments
+                all_assignments = []
+                for idx, row in df_users.iterrows():
+                     asignaciones = db.obtener_asignaciones(row['id'])
+                     all_assignments.extend(asignaciones)
+
+                clientes_no_asignados_df = df_clientes[~df_clientes['id'].isin(all_assignments)]
+
+                if not clientes_no_asignados_df.empty:
+                     for _, cli in clientes_no_asignados_df.iterrows():
+                          d_id = cli['servicio_principal_id']
+                          if pd.notna(d_id) and d_id:
+                               empleados_depto = df_users[df_users['departamento_id'] == d_id]
+                               if not empleados_depto.empty:
+                                    # Find employee with least clients
+                                    carga = [(e['nombre'], len(db.obtener_asignaciones(e['id']))) for _, e in empleados_depto.iterrows()]
+                                    carga.sort(key=lambda x: x[1])
+                                    mejor_empleado = carga[0]
+
+                                    st.info(f"El cliente **{cli['nombre']}** (Depto ID: {d_id}) debería ser asignado a **{mejor_empleado[0]}** (Carga actual: {mejor_empleado[1]} clientes).")
+                               else:
+                                    st.warning(f"El cliente **{cli['nombre']}** necesita un empleado del Depto ID: {d_id}, pero no hay empleados asignados a ese departamento.")
+                          else:
+                               st.write(f"El cliente **{cli['nombre']}** no tiene un Servicio Principal asignado.")
+                else:
+                     st.success("Todos los clientes tienen al menos una asignación.")
+
         # Excluir a los Admins (Nivel 1) porque ellos ven todo
         empleados_op = df_users[~df_users['rol'].str.contains('Admin', case=False, na=False)]
         if not empleados_op.empty:
@@ -1483,24 +1621,36 @@ elif seleccion == "Gestión de Equipo (Admin)":
                     if pd.notna(nombre_asig):
                         tareas_por_usuario[nombre_asig] = tareas_por_usuario.get(nombre_asig, 0) + 1
 
-            # Añadir nodos
-            for _, r in df_graficar.iterrows():
-                u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
-                u_id_int = int(u_id)
-                nivel = r['nivel_jerarquia'] if pd.notna(r['nivel_jerarquia']) else 5
-                nombre_usuario = r['nombre']
+            # Agrupar usuarios por departamento_id
+            df_graficar['departamento_id'] = df_graficar['departamento_id'].fillna(-1).astype(int)
+            departamentos = db.obtener_departamentos()
+            dept_dict = dict(zip(departamentos['id'], departamentos['nombre'])) if not departamentos.empty else {}
+            dept_dict[-1] = "Sin Asignar"
 
-                # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres
-                safe_nombre = html.escape(r['nombre'])
-                safe_rol = html.escape(r['rol'])
+            # Crear subgrafos (clústeres) por departamento
+            dept_groups = df_graficar.groupby('departamento_id')
+            for dept_id, group in dept_groups:
+                dept_name = dept_dict.get(dept_id, "Desconocido")
+                with dot.subgraph(name=f'cluster_{dept_id}') as c:
+                    c.attr(label=dept_name, style='filled,rounded', color='lightgrey', fillcolor='#f9f9f9', fontname='Helvetica-Bold')
+                    # Añadir nodos al clúster
+                    for _, r in group.iterrows():
+                        u_id = str(r['id_x'] if 'id_x' in df_graficar.columns else r['id'])
+                        u_id_int = int(u_id)
+                        nivel = r['nivel_jerarquia'] if pd.notna(r['nivel_jerarquia']) else 5
+                        nombre_usuario = r['nombre']
 
-                c_clientes = clientes_asignados.get(u_id_int, 0)
-                c_tareas = tareas_por_usuario.get(r['nombre'], 0)
+                        # Formato HTML: Nombre en negritas y Puesto en cursivas, escapando caracteres
+                        safe_nombre = html.escape(r['nombre'])
+                        safe_rol = html.escape(r['rol'])
 
-                label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I><BR/><FONT POINT-SIZE=\"10\">👥 Clientes: {c_clientes} | 📋 Tareas: {c_tareas}</FONT>>"
+                        c_clientes = clientes_asignados.get(u_id_int, 0)
+                        c_tareas = tareas_por_usuario.get(r['nombre'], 0)
 
-                color_nodo = obtener_color_por_jerarquia(nivel)
-                dot.node(u_id, label, fillcolor=color_nodo)
+                        label = f"<<B>{safe_nombre}</B><BR/><I>{safe_rol}</I><BR/><FONT POINT-SIZE=\"10\">👥 Clientes: {c_clientes} | 📋 Tareas: {c_tareas}</FONT>>"
+
+                        color_nodo = obtener_color_por_jerarquia(nivel)
+                        c.node(u_id, label, fillcolor=color_nodo)
 
             # Añadir bordes (conexiones jerárquicas)
             for _, r in df_graficar.iterrows():
@@ -1963,6 +2113,26 @@ if seleccion == "Tablero Kanban (Staff)":
                 
     st.divider()
     
+    # Filtro de Privacidad Kanban
+    filtro_depto = "Todos"
+    usuario_operativo = not st.session_state.logged_in_staff['rol'] == 'Administrador'
+
+    if st.session_state.logged_in_staff['rol'] == 'Administrador':
+        deptos = db.obtener_departamentos()
+        if not deptos.empty:
+            deptos_list = ["Todos"] + deptos['nombre'].tolist()
+            filtro_depto = st.selectbox("Filtrar por Departamento", deptos_list)
+    else:
+        depto_usuario_id = st.session_state.logged_in_staff.get('departamento_id')
+        if pd.notna(depto_usuario_id):
+            deptos = db.obtener_departamentos()
+            if not deptos.empty:
+                depto_row = deptos[deptos['id'] == int(depto_usuario_id)]
+                if not depto_row.empty:
+                     filtro_depto = depto_row['nombre'].values[0]
+
+    st.divider()
+
     columnas = ["Por Revisar", "En Proceso", "Lista para Envío", "Finalizada"]
     cols = st.columns(len(columnas))
     
@@ -1971,11 +2141,20 @@ if seleccion == "Tablero Kanban (Staff)":
             st.markdown(f"**{col_name}**")
             df_tareas = db.obtener_tareas_kanban(col_name)
             
-            # Filtro por Auxiliar
-            if st.session_state.logged_in_staff['rol'] == 'Auxiliar':
-                mi_nombre = st.session_state.logged_in_staff['nombre']
-                df_tareas = df_tareas[(df_tareas['Asignado'] == mi_nombre) | (df_tareas['Asignado'].isnull())]
-                
+            # Aplicar filtro de departamento
+            if filtro_depto != "Todos":
+                usuarios = db.obtener_usuarios_despacho()
+                deptos = db.obtener_departamentos()
+                if not usuarios.empty and not deptos.empty:
+                    match_depto = deptos[deptos['nombre'] == filtro_depto]
+                    if not match_depto.empty:
+                        depto_id = match_depto['id'].values[0]
+                        usuarios_depto = usuarios[usuarios['departamento_id'] == depto_id]['nombre'].tolist()
+                        df_tareas = df_tareas[df_tareas['Asignado'].isin(usuarios_depto) | df_tareas['Asignado'].isnull()]
+            elif usuario_operativo and pd.isna(st.session_state.logged_in_staff.get('departamento_id')):
+                # Regression fix: Si es operativo y NO tiene departamento, solo ve sus propias tareas
+                df_tareas = df_tareas[df_tareas['Asignado'] == st.session_state.logged_in_staff['nombre']]
+
             for _, row in df_tareas.iterrows():
                 with st.container(border=True):
                     st.markdown(f"**{row['Cliente']}**")
