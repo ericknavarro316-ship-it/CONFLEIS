@@ -24,6 +24,26 @@ def init_db():
     cursor = conn.cursor()
     
     # Tabla de Clientes
+    # Tabla Departamentos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS departamentos_despacho (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL UNIQUE,
+            descripcion TEXT
+        )
+    ''')
+
+    # Insertar departamentos por defecto si está vacío
+    cursor.execute("SELECT COUNT(*) FROM departamentos_despacho")
+    if cursor.fetchone()[0] == 0:
+        cursor.executemany("INSERT INTO departamentos_despacho (nombre, descripcion) VALUES (?, ?)", [
+            ('Auditoría', 'Revisión y examen de estados financieros'),
+            ('Contabilidad', 'Registro y control de operaciones contables'),
+            ('Nóminas', 'Gestión de pagos y obligaciones laborales'),
+            ('Impuestos', 'Cálculo y presentación de declaraciones fiscales'),
+            ('Legal', 'Asesoría y defensa legal corporativa')
+        ])
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +65,17 @@ def init_db():
     if 'tipo_persona' not in columns:
         try: cursor.execute("ALTER TABLE clientes ADD COLUMN tipo_persona TEXT NOT NULL DEFAULT 'Física'")
         except: pass
+    # Migración: Departamentos
+    try:
+        cursor.execute("ALTER TABLE usuarios_despacho ADD COLUMN departamento_id INTEGER REFERENCES departamentos_despacho(id) ON DELETE SET NULL")
+    except sqlite3.OperationalError:
+        pass
+
+    try:
+        cursor.execute("ALTER TABLE clientes ADD COLUMN servicio_principal_id INTEGER REFERENCES departamentos_despacho(id) ON DELETE SET NULL")
+    except sqlite3.OperationalError:
+        pass
+
     if 'etiquetas' not in columns:
         try: cursor.execute("ALTER TABLE clientes ADD COLUMN etiquetas TEXT DEFAULT ''")
         except: pass
@@ -322,7 +353,7 @@ def verificar_login_equipo(usuario, contrasena):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     query = '''
-        SELECT u.id, u.nombre, r.nombre_rol, u.contrasena, r.permisos_json
+        SELECT u.id, u.nombre, r.nombre_rol, u.contrasena, r.permisos_json, u.departamento_id
         FROM usuarios_despacho u
         JOIN roles_despacho r ON u.rol_id = r.id
         WHERE u.usuario = ?
@@ -333,13 +364,13 @@ def verificar_login_equipo(usuario, contrasena):
     import json
     if resultado and check_password(contrasena, resultado[3]):
         permisos = json.loads(resultado[4]) if resultado[4] else []
-        return (resultado[0], resultado[1], resultado[2], permisos)
+        return (resultado[0], resultado[1], resultado[2], permisos, resultado[5])
     return None
 
 def obtener_usuarios_despacho():
     conn = sqlite3.connect(DB_NAME)
     query = '''
-        SELECT u.id, u.nombre, u.usuario, r.nombre_rol as rol, u.rol_id, u.reporta_a_id, u.estatus
+        SELECT u.id, u.nombre, u.usuario, r.nombre_rol as rol, u.rol_id, u.reporta_a_id, u.estatus, u.departamento_id
         FROM usuarios_despacho u
         JOIN roles_despacho r ON u.rol_id = r.id
     '''
@@ -347,16 +378,16 @@ def obtener_usuarios_despacho():
     conn.close()
     return df
 
-def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=None, estatus='Activo'):
+def agregar_usuario_despacho(nombre, usuario, contrasena, rol_id, reporta_a_id=None, estatus='Activo', departamento_id=None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         hash_pwd = hash_password(contrasena)
-        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol_id, reporta_a_id, estatus) VALUES (?, ?, ?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol_id, reporta_a_id, estatus))
+        cursor.execute("INSERT INTO usuarios_despacho (nombre, usuario, contrasena, rol_id, reporta_a_id, estatus, departamento_id) VALUES (?, ?, ?, ?, ?, ?, ?)", (nombre, usuario, hash_pwd, rol_id, reporta_a_id, estatus, departamento_id))
         conn.commit()
         return True, "Usuario agregado."
-    except sqlite3.IntegrityError:
-        return False, "El nombre de usuario ya existe."
+    except sqlite3.IntegrityError as e:
+        return False, "Error: " + str(e)
     finally:
         conn.close()
 
@@ -393,21 +424,21 @@ def reasignar_subordinados(nuevo_supervisor_id, subordinados_ids):
     conn.close()
     return nombres_reasignados
 
-def actualizar_usuario_despacho(user_id, nombre, usuario, rol_id, reporta_a_id=None, nueva_contrasena=None, estatus='Activo'):
+def actualizar_usuario_despacho(user_id, nombre, usuario, rol_id, reporta_a_id=None, nueva_contrasena=None, estatus='Activo', departamento_id=None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         if nueva_contrasena:
             hash_pwd = hash_password(nueva_contrasena)
-            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, contrasena=?, estatus=? WHERE id=?",
-                           (nombre, usuario, rol_id, reporta_a_id, hash_pwd, estatus, user_id))
+            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, contrasena=?, estatus=?, departamento_id=? WHERE id=?",
+                           (nombre, usuario, rol_id, reporta_a_id, hash_pwd, estatus, departamento_id, user_id))
         else:
-            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, estatus=? WHERE id=?",
-                           (nombre, usuario, rol_id, reporta_a_id, estatus, user_id))
+            cursor.execute("UPDATE usuarios_despacho SET nombre=?, usuario=?, rol_id=?, reporta_a_id=?, estatus=?, departamento_id=? WHERE id=?",
+                           (nombre, usuario, rol_id, reporta_a_id, estatus, departamento_id, user_id))
         conn.commit()
         return True, "Usuario actualizado exitosamente."
-    except sqlite3.IntegrityError:
-        return False, "El nombre de usuario ya existe en otro registro."
+    except sqlite3.IntegrityError as e:
+        return False, "Error: " + str(e)
     finally:
         conn.close()
 
@@ -588,19 +619,19 @@ def eliminar_linea_captura(linea_id):
 
 # --- Funciones para Clientes ---
 
-def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas=""):
+def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas="", servicio_principal_id=None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT INTO clientes (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas))
+            INSERT INTO clientes (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas, servicio_principal_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas, servicio_principal_id))
         conn.commit()
         obtener_clientes.clear()
         return True, "Cliente agregado exitosamente."
-    except sqlite3.IntegrityError:
-        return False, f"El RFC {rfc} ya existe en la base de datos."
+    except sqlite3.IntegrityError as e:
+        return False, f"Error: " + str(e)
     finally:
         conn.close()
 
@@ -623,6 +654,23 @@ def eliminar_cliente(cliente_id):
     conn.commit()
     conn.close()
     obtener_clientes.clear()
+
+def actualizar_cliente(cliente_id, nombre, rfc, tipo_persona, regimen, email, telefono, servicio_principal_id=None):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            UPDATE clientes
+            SET nombre=?, rfc=?, tipo_persona=?, regimen=?, email=?, telefono=?, servicio_principal_id=?
+            WHERE id=?
+        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, servicio_principal_id, cliente_id))
+        conn.commit()
+        obtener_clientes.clear()
+        return True, "Cliente actualizado exitosamente."
+    except sqlite3.IntegrityError as e:
+        return False, f"Error al actualizar cliente: " + str(e)
+    finally:
+        conn.close()
 
 def actualizar_etiquetas_cliente(cliente_id, nuevas_etiquetas):
     conn = sqlite3.connect(DB_NAME)
@@ -820,3 +868,35 @@ def obtener_bitacora_equipo():
     df = pd.read_sql_query("SELECT id, datetime(fecha, 'localtime') as fecha_local, autor, accion, detalle FROM bitacora_equipo ORDER BY fecha DESC", conn)
     conn.close()
     return df
+
+
+# ==========================================
+# CRUD DEPARTAMENTOS
+# ==========================================
+def obtener_departamentos():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM departamentos_despacho", conn)
+    conn.close()
+    return df
+
+def agregar_departamento(nombre, descripcion):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO departamentos_despacho (nombre, descripcion) VALUES (?, ?)", (nombre, descripcion))
+        conn.commit()
+        conn.close()
+        return True, "Departamento agregado con éxito."
+    except sqlite3.IntegrityError:
+        return False, "El departamento ya existe."
+
+def eliminar_departamento(id):
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM departamentos_despacho WHERE id = ?", (id,))
+        conn.commit()
+        conn.close()
+        return True, "Departamento eliminado."
+    except Exception as e:
+        return False, str(e)
