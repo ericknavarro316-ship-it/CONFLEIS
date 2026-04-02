@@ -227,10 +227,71 @@ def formatear_domicilio(domicilio_str):
             res = res.replace(k, marker)
             temp_dict[marker] = v
 
-    for marker, v in temp_dict.items():
-        res = res.replace(marker, f"\n- **{v}** ")
+    dict_words = {
+        "CALLE", "AVENIDA", "BOULEVARD", "CALZADA", "ANDADOR", "PRIVADA", "RETORNO", "CERRADA",
+        "FRACCIONAMIENTO", "COLONIA", "BARRIO", "PUEBLO", "VILLA", "HACIENDA", "AMPLIACION",
+        "SECCION", "SECTOR", "ZONA", "CONJUNTO", "UNIDAD", "HABITACIONAL", "EDIFICIO", "TORRE",
+        "MANZANA", "LOTE", "SUPERMANZANA", "INTERIOR", "EXTERIOR", "NORTE", "SUR", "ORIENTE",
+        "PONIENTE", "ESTE", "OESTE", "DE", "LA", "EL", "LOS", "LAS", "SAN", "SANTA", "SANTO",
+        "DEL", "Y", "JUSTO", "SIERRA", "LADRON", "GUEVARA", "FRANCISCO", "ROJAS", "GONZALEZ",
+        "LUIS", "PEREZ", "VERDIA", "GUADALAJARA", "JALISCO", "MEXICO", "ZAPOPAN", "TLAQUEPAQUE",
+        "TONALA", "TLAJOMULCO", "MONTERREY", "NUEVO", "LEON", "CIUDAD", "CDMX", "ESTADO",
+        "AGUASCALIENTES", "BAJA", "CALIFORNIA", "CAMPECHE", "COAHUILA", "COLIMA", "CHIAPAS",
+        "CHIHUAHUA", "DURANGO", "GUANAJUATO", "GUERRERO", "HIDALGO", "MICHOACAN", "MORELOS",
+        "NAYARIT", "OAXACA", "PUEBLA", "QUERETARO", "QUINTANA", "ROO", "SINALOA", "SONORA",
+        "TABASCO", "TAMAULIPAS", "TLAXCALA", "VERACRUZ", "YUCATAN", "ZACATECAS", "CENTRO",
+        "MIGUEL", "HIDALGO", "JUAREZ", "ALVARO", "OBREGON", "CUAUHTEMOC", "GUSTAVO", "MADERO",
+        "COYOACAN", "TLALPAN", "XOCHIMILCO", "AZCAPOTZALCO", "IZTAPALAPA", "IZTACALCO",
+        "CUAJIMALPA", "MAGDALENA", "CONTRERAS", "MILPA", "ALTA", "TLAHUAC", "VENUSTIANO",
+        "CARRANZA", "JOSE", "MARIA", "MORELOS", "PAVON", "IGNACIO", "ZARAGOZA", "VICENTE",
+        "GUERRERO", "EMILIANO", "ZAPATA", "BENITO", "JUAREZ", "JUAN", "PABLO", "SEGUNDO",
+        "PEDRO", "PABLO", "MATEO", "MARCOS", "LUCAS", "ANTONIO", "CARLOS", "MANUEL", "JESUS",
+        "GARCIA", "MARTINEZ", "HERNANDEZ", "LOPEZ", "DIAZ", "GOMEZ", "FLORES", "MORALES",
+        "VAZQUEZ", "JIMENEZ", "REYES", "RUIZ", "AGUILAR", "MENDOZA", "CASTILLO", "ORTIZ"
+    }
 
-    return res.strip()
+    sorted_dict = sorted(list(dict_words), key=len, reverse=True)
+
+    def tokenize_caps(s):
+        s = s.strip()
+        if not s:
+            return ""
+        res_tok = ""
+        while s:
+            matched = False
+            for w in sorted_dict:
+                if s.startswith(w):
+                    res_tok += w + " "
+                    s = s[len(w):]
+                    matched = True
+                    break
+
+            if not matched:
+                res_tok += s[0]
+                s = s[1:]
+
+        return re.sub(r'\s+', ' ', res_tok).strip()
+
+    parts = res.split("__MARKER_")
+    new_res = parts[0]
+
+    for i in range(1, len(parts)):
+        marker_id_str, rest = parts[i].split("__", 1)
+        marker = f"__MARKER_{marker_id_str}__"
+        v = temp_dict.get(marker, "")
+
+        words = rest.strip().split()
+        fixed_words = []
+        for word in words:
+            if word.isupper() and word.isalpha() and len(word) > 5:
+                fixed_words.append(tokenize_caps(word))
+            else:
+                fixed_words.append(word)
+
+        fixed_rest = " ".join(fixed_words)
+        new_res += f"\n- **{v}** {fixed_rest}"
+
+    return new_res.strip()
 
 def calcular_semaforo(df):
     """Calcula los días restantes y asigna un color al semáforo."""
