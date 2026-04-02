@@ -7,6 +7,7 @@ import database as db
 import pdf_extractor as pex
 import xml_processor as xp
 import tax_calculator as tc
+import helpers
 import report_generator as rg
 import traceback
 import plotly.express as px
@@ -546,15 +547,22 @@ elif seleccion == "Dashboard":
 
     st.write("---")
     st.subheader("⚠️ Alertas de Obligaciones Próximas o Vencidas")
-    if not obligaciones_df.empty:
-        ob_semaforo = calcular_semaforo(obligaciones_df)
-        alertas = ob_semaforo[(ob_semaforo['estado'] == 'Pendiente') & 
-                              (ob_semaforo['semaforo'].str.startswith('🔴') | ob_semaforo['semaforo'].str.startswith('🟠'))]
+
+    # Procesar obligaciones del mes actual
+    hoy_date = date.today()
+    ob_mes_df = helpers.procesar_obligaciones_del_mes(hoy_date.month, hoy_date.year)
+
+    if not ob_mes_df.empty:
+        ob_semaforo = calcular_semaforo(ob_mes_df)
+        alertas = ob_semaforo[(pd.isna(ob_semaforo['fecha_de_entrega'])) &
+                              (ob_semaforo['semaforo'].str.startswith('🔴') | ob_semaforo['semaforo'].str.startswith('🟡'))]
         if alertas.empty:
             st.success("¡Todo al día! No hay obligaciones urgentes próximas a vencer.")
         else:
+            cols_mostrar = ['Cliente', 'descripcion', 'fecha_limite', 'semaforo']
+            alertas['fecha_limite'] = alertas['fecha_limite'].dt.strftime('%Y-%m-%d')
             st.dataframe(
-                alertas.style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                alertas[cols_mostrar].style.applymap(estilo_semaforo, subset=['semaforo']),
                 use_container_width=True, hide_index=True
             )
     else:
@@ -612,13 +620,18 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
                 
         st.write("---")
         st.subheader("Obligaciones (Semáforo Fiscal)")
-        obligaciones_df = db.obtener_obligaciones(tipo_persona)
-        if not obligaciones_df.empty:
-             ob_semaforo = calcular_semaforo(obligaciones_df)
+        hoy_date = date.today()
+        ob_mes_df = helpers.procesar_obligaciones_del_mes(hoy_date.month, hoy_date.year, tipo_persona=tipo_persona)
+        if not ob_mes_df.empty:
+             ob_semaforo = calcular_semaforo(ob_mes_df)
+             cols_mostrar = ['Cliente', 'descripcion', 'fecha_limite', 'semaforo']
+             ob_semaforo['fecha_limite'] = ob_semaforo['fecha_limite'].dt.strftime('%Y-%m-%d')
              st.dataframe(
-                 ob_semaforo.style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                 ob_semaforo[cols_mostrar].style.applymap(estilo_semaforo, subset=['semaforo']),
                  use_container_width=True, hide_index=True
              )
+        else:
+             st.info("No hay obligaciones aplicables este mes para este tipo de persona.")
 
     with tab2:
         st.subheader(f"Registrar Nueva Persona {tipo_persona}")
@@ -764,65 +777,30 @@ elif seleccion == "Calendario General":
         if obligaciones_df.empty:
             st.info("No hay obligaciones asignadas. Agrega plantillas en 'Gestión de Plantillas'.")
         else:
-            from datetime import date, timedelta
-            import calendar
             hoy = date.today()
-            mes_actual = hoy.month
-            anio_actual = hoy.year
 
-            fechas_limite = []
-            para_mes = []
-            para_anio = []
-            for _, row in obligaciones_df.iterrows():
-                notas_venc = row.get("notas", "")
-                if not isinstance(notas_venc, str):
-                    notas_venc = ""
+            # Generar obligaciones para el mes actual y un par hacia atrás y adelante para el calendario
+            meses_a_generar = [
+                (hoy.month - 1 if hoy.month > 1 else 12, hoy.year if hoy.month > 1 else hoy.year - 1),
+                (hoy.month, hoy.year),
+                (hoy.month + 1 if hoy.month < 12 else 1, hoy.year if hoy.month < 12 else hoy.year + 1)
+            ]
 
-                rfc_cliente = str(row.get("rfc", ""))
-                dias_extra = int(row.get("dia_habil_extra", 0))
+            dfs_meses = []
+            for m, y in meses_a_generar:
+                df_m = helpers.procesar_obligaciones_del_mes(m, y)
+                if not df_m.empty:
+                    dfs_meses.append(df_m)
 
-                # Se calcula para el mes actual
-                m = mes_actual
-                y = anio_actual
+            if not dfs_meses:
+                st.info("No hay obligaciones aplicables generadas.")
+            else:
+                df_merged = pd.concat(dfs_meses, ignore_index=True)
 
-                if "17" in notas_venc:
-                    base_date = date(y, m, 17)
-                elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
-                    mes_lim = 4 if len(rfc_cliente) == 13 else 3
-                    base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
-                else:
-                    ultimo_dia = calendar.monthrange(y, m)[1]
-                    base_date = date(y, m, ultimo_dia)
+                # Calcular estatus
+                ob_semaforo = calcular_semaforo(df_merged)
 
-                while base_date.weekday() >= 5:
-                    base_date += timedelta(days=1)
-
-                for _ in range(dias_extra):
-                    base_date += timedelta(days=1)
-                    while base_date.weekday() >= 5:
-                        base_date += timedelta(days=1)
-
-                fechas_limite.append(base_date)
-                para_mes.append(m)
-                para_anio.append(y)
-
-            obligaciones_df['fecha_limite'] = pd.to_datetime(fechas_limite)
-            obligaciones_df['mes_objetivo'] = para_mes
-            obligaciones_df['anio_objetivo'] = para_anio
-
-            # Cruzar con cumplimientos del mes
-            df_merged = pd.merge(
-                obligaciones_df,
-                cumplimientos_df,
-                left_on=['id', 'mes_objetivo', 'anio_objetivo'],
-                right_on=['obligacion_id', 'mes', 'anio'],
-                how='left'
-            )
-            
-            # Calcular estatus
-            ob_semaforo = calcular_semaforo(df_merged)
-
-            # Preparar eventos para el calendario
+                # Preparar eventos para el calendario
             events = []
             for _, row in ob_semaforo.iterrows():
                 color = "gray"
@@ -1242,8 +1220,8 @@ elif seleccion == "Expediente de Cliente":
             with st.popover("Editar Etiquetas"):
                 # Opciones sugeridas y texto libre
                 opciones_tags = ["VIP", "Moroso", "Auditoría SAT", "Revisar Nómina", "Documentación Incompleta"]
-                tags_seleccionados = st.multiselect("Selecciona o escribe etiquetas:", options=opciones_tags + etiquetas_lista, default=etiquetas_lista)
-                if st.button("Actualizar Etiquetas"):
+                tags_seleccionados = st.multiselect("Selecciona o escribe etiquetas:", options=opciones_tags + etiquetas_lista, default=etiquetas_lista, key=f"tags_{cliente_id}")
+                if st.button("Actualizar Etiquetas", key=f"btn_tags_{cliente_id}"):
                      nuevo_string = ",".join(tags_seleccionados)
                      db.actualizar_etiquetas_cliente(cliente_id, nuevo_string)
                      st.rerun()
@@ -1409,39 +1387,13 @@ elif seleccion == "Mi Portal (Cliente)":
     
     with tab1:
         st.subheader("Semáforo Fiscal")
-        st.write("Estas son tus obligaciones fiscales vigentes:")
-        mis_obligaciones = db.obtener_obligaciones(cliente_id=cliente_info['id'])
-        if mis_obligaciones.empty:
-             st.info("No tienes obligaciones asignadas en este momento.")
+        st.write("Estas son tus obligaciones fiscales vigentes para este mes:")
+        hoy_date = date.today()
+        ob_mes_df = helpers.procesar_obligaciones_del_mes(hoy_date.month, hoy_date.year, cliente_id=cliente_info['id'])
+        if ob_mes_df.empty:
+             st.info("No tienes obligaciones aplicables en este mes.")
         else:
-             from datetime import date, timedelta
-             import calendar
-             hoy = date.today()
-             fechas_limite = []
-             for _, row in mis_obligaciones.iterrows():
-                 notas_venc = str(row.get("notas", ""))
-                 dias_extra = int(row.get("dia_habil_extra", 0))
-                 rfc_cli = str(row.get("rfc", ""))
-                 if "17" in notas_venc:
-                     m = hoy.month + 1 if hoy.month < 12 else 1
-                     y = hoy.year if hoy.month < 12 else hoy.year + 1
-                     base_date = date(y, m, 17)
-                 elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
-                     mes_lim = 4 if len(rfc_cli) == 13 else 3
-                     y = hoy.year + 1 if hoy.month > mes_lim else hoy.year
-                     base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
-                 else:
-                     ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
-                     base_date = date(hoy.year, hoy.month, ultimo_dia)
-                 while base_date.weekday() >= 5:
-                     base_date += timedelta(days=1)
-                 for _ in range(dias_extra):
-                     base_date += timedelta(days=1)
-                     while base_date.weekday() >= 5:
-                         base_date += timedelta(days=1)
-                 fechas_limite.append(base_date)
-             mis_obligaciones['fecha_limite'] = pd.to_datetime(fechas_limite)
-             ob_semaforo = calcular_semaforo(mis_obligaciones)
+             ob_semaforo = calcular_semaforo(ob_mes_df)
              ob_semaforo['fecha_limite'] = ob_semaforo['fecha_limite'].dt.strftime('%Y-%m-%d')
              cols_to_show = ['semaforo', 'descripcion', 'fecha_limite']
              st.dataframe(
