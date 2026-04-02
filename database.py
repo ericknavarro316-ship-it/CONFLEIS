@@ -758,7 +758,7 @@ def agregar_obligacion(cliente_id, descripcion, notas="", dia_habil_extra=0):
 def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
     query = '''
-        SELECT o.id, c.nombre as Cliente, o.descripcion, o.notas, o.dia_habil_extra, c.id as cliente_id, c.rfc
+        SELECT o.id, c.nombre as Cliente, o.descripcion, o.notas, o.dia_habil_extra, c.id as cliente_id, c.rfc, c.regimen
         FROM obligaciones o
         JOIN clientes c ON o.cliente_id = c.id
         WHERE 1=1
