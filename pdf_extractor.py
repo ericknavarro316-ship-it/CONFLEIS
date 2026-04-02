@@ -28,7 +28,8 @@ def extraer_datos_constancia(pdf_file):
     try:
         with pdfplumber.open(pdf_file) as pdf:
             for page in pdf.pages:
-                extracted = page.extract_text()
+                # Add x_tolerance and y_tolerance to prevent text squishing
+                extracted = page.extract_text(x_tolerance=2, y_tolerance=3)
                 if extracted:
                     texto += extracted + "\n"
     except Exception as e:

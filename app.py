@@ -314,9 +314,6 @@ def extraer_actividad_principal(actividad_str):
                 highest_pct = pct
                 highest_act = linea
 
-    # Formatting it to look like the markdown bullets if needed, or just return the string.
-    # Since it's requested to just visually leave the one with the highest percentage,
-    # we return a list of one to reuse formatear_lista_vinetas easily.
     return highest_act
 
 def calcular_semaforo(df):
@@ -1157,7 +1154,7 @@ elif seleccion == "Expediente de Cliente":
 
                  st.markdown("#### Actividad Económica Principal")
                  act_principal = extraer_actividad_principal(datos_cliente.get('actividad_economica', 'No registrado'))
-                 st.info(formatear_lista_vinetas(act_principal))
+                 st.info(act_principal)
 
              with col_f2:
                  st.markdown("#### Estado en SAT")
