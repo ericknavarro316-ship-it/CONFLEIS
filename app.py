@@ -322,12 +322,10 @@ def calcular_semaforo(df):
         return df
         
     hoy = date.today()
-    df['dias_restantes'] = (df['fecha_limite'] - hoy).dt.days
+    df['dias_restantes'] = (df['fecha_limite'] - pd.to_datetime(hoy)).dt.days
     
     def asignar_color(row):
-        if row['estado'] == 'Completada':
-            return '✅ Completada'
-        elif row['dias_restantes'] < 0:
+        if row['dias_restantes'] < 0:
             return '🔴 Vencida'
         elif row['dias_restantes'] == 0:
             return '🔴 Vence Hoy'
@@ -337,8 +335,7 @@ def calcular_semaforo(df):
             return f'🟢 En {row["dias_restantes"]} días'
             
     df['semaforo'] = df.apply(asignar_color, axis=1)
-    cols = ['id', 'Cliente', 'semaforo', 'descripcion', 'fecha_limite', 'estado', 'notas']
-    return df[cols]
+    return df
 
 def estilo_semaforo(val):
     color = 'black'
@@ -346,8 +343,6 @@ def estilo_semaforo(val):
         if val.startswith('🔴'): color = 'red'
         elif val.startswith('🟠'): color = 'darkorange'
         elif val.startswith('🟢'): color = 'green'
-        elif val == 'Completada' or val.startswith('✅'): color = 'gray'
-        elif val == 'Pendiente': color = 'blue'
     return f'color: {color}'
 
 # ---------- Vistas de la Aplicación ----------
@@ -716,53 +711,27 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
 
                         # Generate obligations
                         if obligaciones_leidas:
-                             from datetime import timedelta, date
                              import re
 
-                             def calcular_vencimiento(venc_str, rfc_cliente):
-                                 hoy = date.today()
-                                 if "17" in venc_str:
-                                     m = hoy.month + 1 if hoy.month < 12 else 1
-                                     y = hoy.year if hoy.month < 12 else hoy.year + 1
-                                     base_date = date(y, m, 17)
-                                 elif "anual" in venc_str.lower() or "abril" in venc_str.lower() or "marzo" in venc_str.lower():
-                                     mes_lim = 4 if len(rfc_cliente) == 13 else 3
-                                     y = hoy.year + 1
-                                     base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
-                                 else:
-                                     import calendar
-                                     ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
-                                     base_date = date(hoy.year, hoy.month, ultimo_dia)
-
-                                 # Recorrer a hábil si es fin de semana (5=Sábado, 6=Domingo)
-                                 while base_date.weekday() >= 5:
-                                     base_date += timedelta(days=1)
-
+                             def calcular_dias_extra(venc_str, rfc_cliente):
                                  # Aplicar el sexto dígito numérico solo si es obligación mensual "17"
+                                 dias_extra = 0
                                  if "17" in venc_str:
                                      match = re.search(r'\d{6}', rfc_cliente)
                                      if match:
                                          numeros = match.group(0)
-                                         sexto_digito = int(numeros[5])
-
-                                         dias_extra = 0
-                                         if sexto_digito in [1, 2]: dias_extra = 1
-                                         elif sexto_digito in [3, 4]: dias_extra = 2
-                                         elif sexto_digito in [5, 6]: dias_extra = 3
-                                         elif sexto_digito in [7, 8]: dias_extra = 4
-                                         elif sexto_digito in [9, 0]: dias_extra = 5
-
-                                         for _ in range(dias_extra):
-                                             base_date += timedelta(days=1)
-                                             # Saltar fines de semana mientras se suma
-                                             while base_date.weekday() >= 5:
-                                                 base_date += timedelta(days=1)
-
-                                 return base_date
+                                         if len(numeros) >= 6:
+                                             sexto_digito = int(numeros[5])
+                                             if sexto_digito in [1, 2]: dias_extra = 1
+                                             elif sexto_digito in [3, 4]: dias_extra = 2
+                                             elif sexto_digito in [5, 6]: dias_extra = 3
+                                             elif sexto_digito in [7, 8]: dias_extra = 4
+                                             elif sexto_digito in [9, 0]: dias_extra = 5
+                                 return dias_extra
 
                              for ob in obligaciones_leidas:
-                                  fecha_calculada = calcular_vencimiento(ob["vencimiento"], rfc.upper())
-                                  db.agregar_obligacion(int(nuevo_id), ob["descripcion"], fecha_calculada, ob["vencimiento"])
+                                  d_extra = calcular_dias_extra(ob["vencimiento"], rfc.upper())
+                                  db.agregar_obligacion(int(nuevo_id), ob["descripcion"], ob["vencimiento"], d_extra)
 
                         # To force switch tabs visually, we can't do it directly in Streamlit without query params, but we can instruct the user
                         st.success("¡Cliente guardado exitosamente! Ve a 'Expediente de Cliente' para ver su perfil y las obligaciones programadas.")
@@ -782,13 +751,56 @@ elif seleccion == "Calendario General":
         if obligaciones_df.empty:
             st.info("No hay obligaciones asignadas.")
         else:
-            ob_semaforo = calcular_semaforo(obligaciones_df)
-            estado_filtro = st.selectbox("Filtrar por estado", ["Todos", "Pendiente", "Completada"])
-            if estado_filtro != "Todos":
-                ob_semaforo = ob_semaforo[ob_semaforo["estado"] == estado_filtro]
+            from datetime import date, timedelta
+            import calendar
+            hoy = date.today()
+
+            # Dinámicamente calcular la fecha límite para el mes actual / mes próximo (depende de la obligación)
+            fechas_limite = []
+            for _, row in obligaciones_df.iterrows():
+                notas_venc = row.get("notas", "")
+                if not isinstance(notas_venc, str):
+                    notas_venc = ""
+
+                rfc_cliente = str(row.get("rfc", ""))
+                dias_extra = int(row.get("dia_habil_extra", 0))
+
+                if "17" in notas_venc:
+                    # Mensuales - vencen el 17 del mes siguiente o actual dependiendo
+                    m = hoy.month + 1 if hoy.month < 12 else 1
+                    y = hoy.year if hoy.month < 12 else hoy.year + 1
+                    base_date = date(y, m, 17)
+                elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
+                    # Anuales
+                    mes_lim = 4 if len(rfc_cliente) == 13 else 3
+                    y = hoy.year + 1 if hoy.month > mes_lim else hoy.year
+                    base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
+                else:
+                    ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
+                    base_date = date(hoy.year, hoy.month, ultimo_dia)
+
+                # Recorrer a hábil si es fin de semana (5=Sábado, 6=Domingo)
+                while base_date.weekday() >= 5:
+                    base_date += timedelta(days=1)
                 
+                # Agregar días extra hábiles
+                for _ in range(dias_extra):
+                    base_date += timedelta(days=1)
+                    while base_date.weekday() >= 5:
+                        base_date += timedelta(days=1)
+
+                fechas_limite.append(base_date)
+
+            obligaciones_df['fecha_limite'] = pd.to_datetime(fechas_limite)
+
+            ob_semaforo = calcular_semaforo(obligaciones_df)
+
+            # Formatear para mostrar
+            ob_mostrar = ob_semaforo[['Cliente', 'descripcion', 'fecha_limite', 'semaforo', 'notas', 'id']].copy()
+            ob_mostrar['fecha_limite'] = ob_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d')
+
             st.dataframe(
-                ob_semaforo.style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                ob_mostrar.style.applymap(estilo_semaforo, subset=['semaforo']),
                 use_container_width=True, hide_index=True
             )
             
@@ -796,16 +808,8 @@ elif seleccion == "Calendario General":
             st.subheader("Acciones Rápidas")
             col1, col2 = st.columns(2)
             with col1:
-                st.write("**Actualizar Estado**")
-                opciones_act = dict(zip(obligaciones_df['Cliente'] + " - " + obligaciones_df['descripcion'], obligaciones_df['id']))
-                if opciones_act:
-                    obl_a_act = st.selectbox("Selecciona la obligación:", list(opciones_act.keys()))
-                    nuevo_estado = st.selectbox("Nuevo Estado:", ["Pendiente", "Completada"])
-                    if st.button("Actualizar", key="btn_act_gral"):
-                        db.actualizar_estado_obligacion(opciones_act[obl_a_act], nuevo_estado)
-                        st.rerun()
-            with col2:
                 st.write("**Eliminar Obligación**")
+                opciones_act = dict(zip(obligaciones_df['Cliente'] + " - " + obligaciones_df['descripcion'], obligaciones_df['id']))
                 if opciones_act:
                     obl_a_elim = st.selectbox("Selecciona la obligación a eliminar:", list(opciones_act.keys()), key="sel_elim_gral")
                     if st.button("Eliminar", key="btn_elim_gral"):
@@ -826,12 +830,12 @@ elif seleccion == "Calendario General":
                 obligaciones_comunes = ["Declaración Mensual IVA e ISR", "Declaración Anual", "Cálculo de Nómina y Retenciones", "Envío de DIOT", "Pago SUA/IMSS", "Otro"]
                 descripcion = st.selectbox("Tipo de Obligación", obligaciones_comunes)
                 if descripcion == "Otro": descripcion = st.text_input("Especifica la obligación:")
-                fecha_limite = st.date_input("Fecha Límite *")
-                notas = st.text_area("Notas o Detalles (Opcional)")
+                notas = st.text_area("Notas o Detalles de Vencimiento (ej. 'A más tardar el día 17', 'A más tardar el 30 de abril')")
+                dia_habil_extra = st.number_input("Días Hábiles Extra", min_value=0, max_value=5, value=0)
                 enviar_obl = st.form_submit_button("Asignar Obligación")
                 
                 if enviar_obl and descripcion:
-                    db.agregar_obligacion(nombres_clientes[cliente_seleccionado], descripcion, fecha_limite, notas)
+                    db.agregar_obligacion(nombres_clientes[cliente_seleccionado], descripcion, notas, dia_habil_extra)
                     st.success(f"Obligación asignada exitosamente.")
                     st.rerun()
 
@@ -1170,7 +1174,7 @@ elif seleccion == "Expediente de Cliente":
                  if obs_df.empty:
                      st.caption("No hay obligaciones asignadas a este cliente.")
                  else:
-                     st.dataframe(obs_df[['descripcion', 'fecha_limite', 'estado', 'notas']], use_container_width=True, hide_index=True)
+                     st.dataframe(obs_df[['descripcion', 'notas', 'dia_habil_extra']], use_container_width=True, hide_index=True)
 
         with tab_graficas:
              st.subheader("Análisis Financiero Histórico")
@@ -1296,15 +1300,43 @@ elif seleccion == "Mi Portal (Cliente)":
     
     with tab1:
         st.subheader("Semáforo Fiscal")
-        st.write("Estas son tus obligaciones fiscales vigentes y su estado actual:")
+        st.write("Estas son tus obligaciones fiscales vigentes:")
         mis_obligaciones = db.obtener_obligaciones(cliente_id=cliente_info['id'])
         if mis_obligaciones.empty:
-             st.info("No tienes obligaciones pendientes en este momento.")
+             st.info("No tienes obligaciones asignadas en este momento.")
         else:
+             from datetime import date, timedelta
+             import calendar
+             hoy = date.today()
+             fechas_limite = []
+             for _, row in mis_obligaciones.iterrows():
+                 notas_venc = str(row.get("notas", ""))
+                 dias_extra = int(row.get("dia_habil_extra", 0))
+                 rfc_cli = str(row.get("rfc", ""))
+                 if "17" in notas_venc:
+                     m = hoy.month + 1 if hoy.month < 12 else 1
+                     y = hoy.year if hoy.month < 12 else hoy.year + 1
+                     base_date = date(y, m, 17)
+                 elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
+                     mes_lim = 4 if len(rfc_cli) == 13 else 3
+                     y = hoy.year + 1 if hoy.month > mes_lim else hoy.year
+                     base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
+                 else:
+                     ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
+                     base_date = date(hoy.year, hoy.month, ultimo_dia)
+                 while base_date.weekday() >= 5:
+                     base_date += timedelta(days=1)
+                 for _ in range(dias_extra):
+                     base_date += timedelta(days=1)
+                     while base_date.weekday() >= 5:
+                         base_date += timedelta(days=1)
+                 fechas_limite.append(base_date)
+             mis_obligaciones['fecha_limite'] = pd.to_datetime(fechas_limite)
              ob_semaforo = calcular_semaforo(mis_obligaciones)
-             cols_to_show = ['semaforo', 'descripcion', 'fecha_limite', 'estado']
+             ob_semaforo['fecha_limite'] = ob_semaforo['fecha_limite'].dt.strftime('%Y-%m-%d')
+             cols_to_show = ['semaforo', 'descripcion', 'fecha_limite']
              st.dataframe(
-                 ob_semaforo[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                 ob_semaforo[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo']),
                  use_container_width=True, hide_index=True
              )
              
