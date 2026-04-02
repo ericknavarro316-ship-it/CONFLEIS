@@ -489,7 +489,8 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
         
         default_rfc, default_nombre, default_regimen = "", "", ""
         default_cp, default_curp, default_actividad = "", "", ""
-        default_fecha_inicio, default_estatus = "", ""
+        default_fecha_inicio, default_estatus, default_domicilio = "", "", ""
+        obligaciones_leidas = []
         
         if pdf_file is not None:
              datos_extraidos, msj = pex.extraer_datos_constancia(pdf_file)
@@ -503,10 +504,12 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
                  default_nombre = datos_extraidos.get("nombre", "")
                  default_regimen = datos_extraidos.get("regimen", "")
                  default_cp = datos_extraidos.get("codigo_postal", "")
+                 default_domicilio = datos_extraidos.get("domicilio", "")
                  default_curp = datos_extraidos.get("curp", "")
                  default_actividad = datos_extraidos.get("actividad_economica", "")
                  default_fecha_inicio = datos_extraidos.get("fecha_inicio_operaciones", "")
                  default_estatus = datos_extraidos.get("estatus_padron", "")
+                 obligaciones_leidas = datos_extraidos.get("obligaciones", [])
 
                  if datos_extraidos.get("tipo_persona") and datos_extraidos.get("tipo_persona") != tipo_persona:
                       st.warning(f"¡Atención! El RFC indica que es Persona {datos_extraidos.get('tipo_persona')}.")
@@ -523,30 +526,10 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
                     curp = st.text_input("CURP", value=default_curp)
                 else:
                     curp = ""
-            with col_p2:
-                if tipo_persona == "Física":
-                    regimenes = ["Sueldos y Salarios", "Actividad Empresarial y Profesional", "Régimen Simplificado de Confianza (RESICO)", "Arrendamiento", "Plataformas Tecnológicas", "Otro"]
-                else:
-                    regimenes = ["Persona Moral - Régimen General", "Persona Moral - RESICO", "Organización Sin Fines de Lucro", "Otro"]
-                
-                try:
-                    reg_index = regimenes.index(default_regimen) if default_regimen in regimenes else 0
-                except ValueError:
-                    reg_index = 0
-
-                regimen = st.selectbox("Régimen Fiscal Principal", regimenes, index=reg_index)
-                if default_regimen and default_regimen not in regimenes:
-                     st.caption(f"Leído del PDF: *{default_regimen}*")
-
-                codigo_postal = st.text_input("Código Postal", value=default_cp)
                 estatus_padron = st.text_input("Estatus en el Padrón", value=default_estatus)
-
-            st.markdown("##### 🏢 Datos Operativos")
-            col_o1, col_o2 = st.columns(2)
-            with col_o1:
-                actividad_economica = st.text_area("Actividad Económica", value=default_actividad, height=68)
-            with col_o2:
-                fecha_inicio_operaciones = st.text_input("Fecha Inicio Operaciones", value=default_fecha_inicio)
+            with col_p2:
+                codigo_postal = st.text_input("Código Postal", value=default_cp)
+                domicilio = st.text_area("Domicilio Completo", value=default_domicilio, height=120)
 
             st.markdown("##### 📞 Contacto y Configuración")
             col_c1, col_c2 = st.columns(2)
@@ -558,7 +541,25 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
                 opciones_srv = ["Ninguno"] + departamentos['nombre'].tolist() if not departamentos.empty else ["Ninguno"]
                 srv_sel = st.selectbox("Servicio Principal (Departamento)", opciones_srv)
 
-            enviar = st.form_submit_button("Guardar Cliente")
+            st.markdown("##### 🏢 Datos Operativos")
+            col_o1, col_o2 = st.columns(2)
+            with col_o1:
+                st.caption("Todos los Regímenes de la Constancia")
+                regimen = st.text_area("Régimen Fiscal", value=default_regimen, height=100)
+            with col_o2:
+                st.caption("Todas las Actividades Económicas")
+                actividad_economica = st.text_area("Actividades", value=default_actividad, height=100)
+
+            fecha_inicio_operaciones = st.text_input("Fecha Inicio Operaciones", value=default_fecha_inicio)
+
+            st.markdown("##### 🗓️ Obligaciones (Vista Previa)")
+            if obligaciones_leidas:
+                 for ob in obligaciones_leidas:
+                     st.info(f"**{ob['descripcion']}**\n\n*Vencimiento:* {ob['vencimiento']}")
+            else:
+                 st.caption("Sube un PDF para previsualizar las obligaciones y programar vencimientos.")
+
+            enviar = st.form_submit_button("Guardar Cliente y Generar Expediente")
             
             if enviar:
                 if not nombre or not rfc:
@@ -573,10 +574,67 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
                         codigo_postal=codigo_postal, curp=curp,
                         actividad_economica=actividad_economica,
                         fecha_inicio_operaciones=fecha_inicio_operaciones,
-                        estatus_padron=estatus_padron
+                        estatus_padron=estatus_padron,
+                        domicilio=domicilio
                     )
                     if exito:
                         st.success(mensaje)
+                        # Process logic to add obligations and shift screens
+                        cliente_guardado = db.obtener_clientes(tipo_persona)
+                        nuevo_id = cliente_guardado[cliente_guardado['rfc'] == rfc.upper()]['id'].values[0]
+
+                        # Generate obligations
+                        if obligaciones_leidas:
+                             from datetime import timedelta, date
+                             import re
+
+                             def calcular_vencimiento(venc_str, rfc_cliente):
+                                 hoy = date.today()
+                                 if "17" in venc_str:
+                                     m = hoy.month + 1 if hoy.month < 12 else 1
+                                     y = hoy.year if hoy.month < 12 else hoy.year + 1
+                                     base_date = date(y, m, 17)
+                                 elif "anual" in venc_str.lower() or "abril" in venc_str.lower() or "marzo" in venc_str.lower():
+                                     mes_lim = 4 if len(rfc_cliente) == 13 else 3
+                                     y = hoy.year + 1
+                                     base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
+                                 else:
+                                     import calendar
+                                     ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
+                                     base_date = date(hoy.year, hoy.month, ultimo_dia)
+
+                                 # Recorrer a hábil si es fin de semana (5=Sábado, 6=Domingo)
+                                 while base_date.weekday() >= 5:
+                                     base_date += timedelta(days=1)
+
+                                 # Aplicar el sexto dígito numérico solo si es obligación mensual "17"
+                                 if "17" in venc_str:
+                                     match = re.search(r'\d{6}', rfc_cliente)
+                                     if match:
+                                         numeros = match.group(0)
+                                         sexto_digito = int(numeros[5])
+
+                                         dias_extra = 0
+                                         if sexto_digito in [1, 2]: dias_extra = 1
+                                         elif sexto_digito in [3, 4]: dias_extra = 2
+                                         elif sexto_digito in [5, 6]: dias_extra = 3
+                                         elif sexto_digito in [7, 8]: dias_extra = 4
+                                         elif sexto_digito in [9, 0]: dias_extra = 5
+
+                                         for _ in range(dias_extra):
+                                             base_date += timedelta(days=1)
+                                             # Saltar fines de semana mientras se suma
+                                             while base_date.weekday() >= 5:
+                                                 base_date += timedelta(days=1)
+
+                                 return base_date
+
+                             for ob in obligaciones_leidas:
+                                  fecha_calculada = calcular_vencimiento(ob["vencimiento"], rfc.upper())
+                                  db.agregar_obligacion(nuevo_id, ob["descripcion"], fecha_calculada, ob["vencimiento"])
+
+                        # To force switch tabs visually, we can't do it directly in Streamlit without query params, but we can instruct the user
+                        st.success("¡Cliente guardado exitosamente! Ve a 'Expediente de Cliente' para ver su perfil y las obligaciones programadas.")
                         st.rerun()
                     else:
                         st.error(mensaje)
@@ -888,9 +946,40 @@ elif seleccion == "Expediente de Cliente":
         col_titulo, col_etiquetas = st.columns([2, 1])
         with col_titulo:
             st.subheader(f"👤 {datos_cliente['nombre']}")
-            st.write(f"**RFC:** {rfc_cli} | **Régimen:** {datos_cliente['regimen']}")
+            st.write(f"**RFC:** {rfc_cli}")
+            if datos_cliente.get('curp'):
+                 st.write(f"**CURP:** {datos_cliente['curp']}")
             st.write(f"**Email:** {datos_cliente['email']} | **Teléfono:** {datos_cliente['telefono']}")
             
+            # Mostrar Empleado y Supervisor
+            # Si hay un servicio principal, mostrar el encargado (asumiendo que el que está asignado es el operativo)
+            asignaciones_str = "No asignado"
+            supervisor_str = "N/A"
+            df_usuarios = db.obtener_usuarios_despacho()
+            if not df_usuarios.empty:
+                # Buscar en asignaciones
+                conn = db.sqlite3.connect(db.DB_NAME)
+                cursor = conn.cursor()
+                cursor.execute("SELECT usuario_id FROM asignaciones_clientes WHERE cliente_id = ?", (cliente_id,))
+                rows = cursor.fetchall()
+                conn.close()
+                if rows:
+                     ids_asignados = [row[0] for row in rows]
+                     asignados = df_usuarios[df_usuarios['id'].isin(ids_asignados)]
+                     if not asignados.empty:
+                          nombres_asignados = asignados['nombre'].tolist()
+                          asignaciones_str = ", ".join(nombres_asignados)
+
+                          # Tomar el supervisor del primer asignado
+                          primer_asig = asignados.iloc[0]
+                          if pd.notna(primer_asig['reporta_a_id']):
+                               superv = df_usuarios[df_usuarios['id'] == primer_asig['reporta_a_id']]
+                               if not superv.empty:
+                                    supervisor_str = superv['nombre'].values[0]
+
+            st.markdown(f"**Responsable(s):** {asignaciones_str} | **Supervisor:** {supervisor_str}")
+
+
         with col_etiquetas:
             st.write("**🏷️ Etiquetas CRM:**")
             etiquetas_actuales = str(datos_cliente.get('etiquetas', ''))
@@ -916,13 +1005,41 @@ elif seleccion == "Expediente de Cliente":
                      st.rerun()
 
         # Pestañas para dividir la vista del Expediente
-        tab_graficas, tab_boveda, tab_archivo, tab_notas = st.tabs([
+        tab_fiscal, tab_graficas, tab_boveda, tab_archivo, tab_notas = st.tabs([
+             "🏢 Perfil Fiscal",
              "📊 Finanzas y Gráficas", 
              "🔐 Bóveda de Accesos", 
              "📁 Archivo Digital",
              "📝 Bitácora (Notas)"
         ])
-        
+
+        with tab_fiscal:
+             st.subheader("Datos Operativos de la Constancia")
+
+             col_f1, col_f2 = st.columns(2)
+             with col_f1:
+                 st.markdown("#### Regímenes Fiscales")
+                 st.info(datos_cliente.get('regimen', 'No registrado'))
+
+                 st.markdown("#### Actividades Económicas")
+                 st.info(datos_cliente.get('actividad_economica', 'No registrado'))
+
+             with col_f2:
+                 st.markdown("#### Domicilio Registrado")
+                 st.caption(f"**C.P.** {datos_cliente.get('codigo_postal', '')}")
+                 st.write(datos_cliente.get('domicilio', 'No registrado'))
+
+                 st.markdown("#### Estado en SAT")
+                 st.write(f"**Estatus:** {datos_cliente.get('estatus_padron', '')}")
+                 st.write(f"**Inicio de Operaciones:** {datos_cliente.get('fecha_inicio_operaciones', '')}")
+
+             st.markdown("#### 🗓️ Obligaciones Registradas")
+             obs_df = db.obtener_obligaciones(cliente_id=cliente_id)
+             if obs_df.empty:
+                 st.caption("No hay obligaciones asignadas a este cliente.")
+             else:
+                 st.dataframe(obs_df[['descripcion', 'fecha_limite', 'estado', 'notas']], use_container_width=True, hide_index=True)
+
         with tab_graficas:
              st.subheader("Análisis Financiero Histórico")
              st.caption("Visualización de Ingresos vs Gastos a lo largo del año (Datos Demo).")
