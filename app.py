@@ -294,6 +294,31 @@ def formatear_domicilio(domicilio_str):
 
     return new_res.strip()
 
+def extraer_actividad_principal(actividad_str):
+    """Extrae la actividad con mayor porcentaje si están disponibles, de lo contrario devuelve todas o la primera."""
+    if not actividad_str or str(actividad_str).strip() in ['No registrado', 'None']:
+        return "No registrado"
+
+    lineas = [l.strip() for l in str(actividad_str).split('\n') if l.strip()]
+    if not lineas:
+        return "No registrado"
+
+    highest_act = lineas[0]
+    highest_pct = -1
+
+    for linea in lineas:
+        match = re.search(r"\((\d+)%\)", linea)
+        if match:
+            pct = int(match.group(1))
+            if pct > highest_pct:
+                highest_pct = pct
+                highest_act = linea
+
+    # Formatting it to look like the markdown bullets if needed, or just return the string.
+    # Since it's requested to just visually leave the one with the highest percentage,
+    # we return a list of one to reuse formatear_lista_vinetas easily.
+    return highest_act
+
 def calcular_semaforo(df):
     """Calcula los días restantes y asigna un color al semáforo."""
     if df.empty:
@@ -1130,8 +1155,9 @@ elif seleccion == "Expediente de Cliente":
                  st.markdown("#### Regímenes Fiscales")
                  st.info(formatear_lista_vinetas(datos_cliente.get('regimen', 'No registrado')))
 
-                 st.markdown("#### Actividades Económicas")
-                 st.info(formatear_lista_vinetas(datos_cliente.get('actividad_economica', 'No registrado')))
+                 st.markdown("#### Actividad Económica Principal")
+                 act_principal = extraer_actividad_principal(datos_cliente.get('actividad_economica', 'No registrado'))
+                 st.info(formatear_lista_vinetas(act_principal))
 
              with col_f2:
                  st.markdown("#### Estado en SAT")
@@ -1142,12 +1168,12 @@ elif seleccion == "Expediente de Cliente":
              st.caption(f"**C.P.** {datos_cliente.get('codigo_postal', '')}")
              st.write(formatear_domicilio(datos_cliente.get('domicilio', 'No registrado')))
 
-             st.markdown("#### 🗓️ Obligaciones Registradas")
-             obs_df = db.obtener_obligaciones(cliente_id=cliente_id)
-             if obs_df.empty:
-                 st.caption("No hay obligaciones asignadas a este cliente.")
-             else:
-                 st.dataframe(obs_df[['descripcion', 'fecha_limite', 'estado', 'notas']], use_container_width=True, hide_index=True)
+             with st.expander("🗓️ Ver Obligaciones Registradas", expanded=False):
+                 obs_df = db.obtener_obligaciones(cliente_id=cliente_id)
+                 if obs_df.empty:
+                     st.caption("No hay obligaciones asignadas a este cliente.")
+                 else:
+                     st.dataframe(obs_df[['descripcion', 'fecha_limite', 'estado', 'notas']], use_container_width=True, hide_index=True)
 
         with tab_graficas:
              st.subheader("Análisis Financiero Histórico")
