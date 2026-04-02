@@ -57,3 +57,4 @@ urllib3==2.6.3
 watchdog==6.0.0
 xmltodict==1.0.4
 graphviz
+streamlit-calendar

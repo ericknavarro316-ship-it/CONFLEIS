@@ -115,6 +115,19 @@ def init_db():
         )
     ''')
 
+    # Tabla de Cumplimientos
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cumplimientos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            obligacion_id INTEGER,
+            mes INTEGER NOT NULL,
+            anio INTEGER NOT NULL,
+            fecha_de_entrega DATE NOT NULL,
+            FOREIGN KEY (obligacion_id) REFERENCES obligaciones (id) ON DELETE CASCADE,
+            UNIQUE(obligacion_id, mes, anio)
+        )
+    ''')
+
     # Tabla de Obligaciones
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS obligaciones (
@@ -768,6 +781,35 @@ def eliminar_obligacion(obligacion_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM obligaciones WHERE id = ?", (obligacion_id,))
+    conn.commit()
+    conn.close()
+
+def registrar_cumplimiento(obligacion_id, mes, anio, fecha_de_entrega):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute('''
+            INSERT INTO cumplimientos (obligacion_id, mes, anio, fecha_de_entrega)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(obligacion_id, mes, anio)
+            DO UPDATE SET fecha_de_entrega=excluded.fecha_de_entrega
+        ''', (obligacion_id, mes, anio, fecha_de_entrega))
+        conn.commit()
+    except Exception as e:
+        print(f"Error al registrar cumplimiento: {e}")
+    finally:
+        conn.close()
+
+def obtener_cumplimientos():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM cumplimientos", conn)
+    conn.close()
+    return df
+
+def eliminar_cumplimiento(cumplimiento_id):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM cumplimientos WHERE id = ?", (cumplimiento_id,))
     conn.commit()
     conn.close()
 
