@@ -762,7 +762,7 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
 
                              for ob in obligaciones_leidas:
                                   fecha_calculada = calcular_vencimiento(ob["vencimiento"], rfc.upper())
-                                  db.agregar_obligacion(nuevo_id, ob["descripcion"], fecha_calculada, ob["vencimiento"])
+                                  db.agregar_obligacion(int(nuevo_id), ob["descripcion"], fecha_calculada, ob["vencimiento"])
 
                         # To force switch tabs visually, we can't do it directly in Streamlit without query params, but we can instruct the user
                         st.success("¡Cliente guardado exitosamente! Ve a 'Expediente de Cliente' para ver su perfil y las obligaciones programadas.")
