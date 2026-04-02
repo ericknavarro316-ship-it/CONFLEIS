@@ -934,7 +934,7 @@ elif seleccion == "Expediente de Cliente":
     else:
         clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
         opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
-        cliente_seleccionado = st.selectbox("Buscar Cliente:", list(opciones_cli.keys()))
+        cliente_seleccionado = st.selectbox("Buscar Cliente:", list(opciones_cli.keys()), key="selectbox_expediente")
         
         cliente_id = opciones_cli[cliente_seleccionado]
         datos_cliente = clientes_df[clientes_df['id'] == cliente_id].iloc[0]
@@ -1931,7 +1931,7 @@ elif seleccion == "Expediente de Cliente":
     else:
         clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
         opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
-        cliente_seleccionado = st.selectbox("Buscar Cliente:", list(opciones_cli.keys()))
+        cliente_seleccionado = st.selectbox("Buscar Cliente:", list(opciones_cli.keys()), key="selectbox_notificaciones")
         
         cliente_id = opciones_cli[cliente_seleccionado]
         datos_cliente = clientes_df[clientes_df['id'] == cliente_id].iloc[0]
