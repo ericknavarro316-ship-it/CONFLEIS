@@ -1,5 +1,6 @@
 import re
 import streamlit as st
+from streamlit_calendar import calendar as st_calendar
 import pandas as pd
 from datetime import datetime, date
 import database as db
@@ -317,7 +318,7 @@ def extraer_actividad_principal(actividad_str):
     return highest_act
 
 def calcular_semaforo(df):
-    """Calcula los días restantes y asigna un color al semáforo."""
+    """Calcula los días restantes y asigna un color al semáforo (incluyendo cumplimientos)."""
     if df.empty:
         return df
         
@@ -325,14 +326,24 @@ def calcular_semaforo(df):
     df['dias_restantes'] = (df['fecha_limite'] - pd.to_datetime(hoy)).dt.days
     
     def asignar_color(row):
+        # Si tiene fecha de entrega, ya se cumplió
+        if pd.notna(row.get('fecha_de_entrega')):
+            fecha_entrega = pd.to_datetime(row['fecha_de_entrega'])
+            fecha_limite = pd.to_datetime(row['fecha_limite'])
+            if fecha_entrega <= fecha_limite:
+                return '✅ Completada (A tiempo)'
+            else:
+                return '⚠️ Completada (Fuera de tiempo)'
+
+        # Si no se ha cumplido
         if row['dias_restantes'] < 0:
             return '🔴 Vencida'
         elif row['dias_restantes'] == 0:
-            return '🔴 Vence Hoy'
+            return '🟡 Vence Hoy'
         elif row['dias_restantes'] <= 3:
-            return f'🟠 En {row["dias_restantes"]} días'
+            return f'🟡 En {row["dias_restantes"]} días'
         else:
-            return f'🟢 En {row["dias_restantes"]} días'
+            return f'⚪ En {row["dias_restantes"]} días'
             
     df['semaforo'] = df.apply(asignar_color, axis=1)
     return df
@@ -341,8 +352,9 @@ def estilo_semaforo(val):
     color = 'black'
     if isinstance(val, str):
         if val.startswith('🔴'): color = 'red'
-        elif val.startswith('🟠'): color = 'darkorange'
-        elif val.startswith('🟢'): color = 'green'
+        elif val.startswith('🟡'): color = '#ccaa00'
+        elif val.startswith('✅'): color = 'green'
+        elif val.startswith('⚠️'): color = 'darkorange'
     return f'color: {color}'
 
 # ---------- Vistas de la Aplicación ----------
@@ -742,21 +754,25 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
 elif seleccion == "Calendario General":
     st.title("📅 Calendario General de Obligaciones")
     
-    tab1, tab2 = st.tabs(["Panel General", "Asignar Obligación"])
+    tab1, tab2 = st.tabs(["Monitor Diario", "Gestión de Plantillas"])
     
     with tab1:
-        st.subheader("Todas las Obligaciones por Cumplir")
+        st.subheader("Monitor de Obligaciones Mensuales")
         obligaciones_df = db.obtener_obligaciones()
+        cumplimientos_df = db.obtener_cumplimientos()
         
         if obligaciones_df.empty:
-            st.info("No hay obligaciones asignadas.")
+            st.info("No hay obligaciones asignadas. Agrega plantillas en 'Gestión de Plantillas'.")
         else:
             from datetime import date, timedelta
             import calendar
             hoy = date.today()
+            mes_actual = hoy.month
+            anio_actual = hoy.year
 
-            # Dinámicamente calcular la fecha límite para el mes actual / mes próximo (depende de la obligación)
             fechas_limite = []
+            para_mes = []
+            para_anio = []
             for _, row in obligaciones_df.iterrows():
                 notas_venc = row.get("notas", "")
                 if not isinstance(notas_venc, str):
@@ -765,79 +781,172 @@ elif seleccion == "Calendario General":
                 rfc_cliente = str(row.get("rfc", ""))
                 dias_extra = int(row.get("dia_habil_extra", 0))
 
+                # Se calcula para el mes actual
+                m = mes_actual
+                y = anio_actual
+
                 if "17" in notas_venc:
-                    # Mensuales - vencen el 17 del mes siguiente o actual dependiendo
-                    m = hoy.month + 1 if hoy.month < 12 else 1
-                    y = hoy.year if hoy.month < 12 else hoy.year + 1
                     base_date = date(y, m, 17)
                 elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
-                    # Anuales
                     mes_lim = 4 if len(rfc_cliente) == 13 else 3
-                    y = hoy.year + 1 if hoy.month > mes_lim else hoy.year
                     base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
                 else:
-                    ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
-                    base_date = date(hoy.year, hoy.month, ultimo_dia)
+                    ultimo_dia = calendar.monthrange(y, m)[1]
+                    base_date = date(y, m, ultimo_dia)
 
-                # Recorrer a hábil si es fin de semana (5=Sábado, 6=Domingo)
                 while base_date.weekday() >= 5:
                     base_date += timedelta(days=1)
-                
-                # Agregar días extra hábiles
+
                 for _ in range(dias_extra):
                     base_date += timedelta(days=1)
                     while base_date.weekday() >= 5:
                         base_date += timedelta(days=1)
 
                 fechas_limite.append(base_date)
+                para_mes.append(m)
+                para_anio.append(y)
 
             obligaciones_df['fecha_limite'] = pd.to_datetime(fechas_limite)
+            obligaciones_df['mes_objetivo'] = para_mes
+            obligaciones_df['anio_objetivo'] = para_anio
 
-            ob_semaforo = calcular_semaforo(obligaciones_df)
-
-            # Formatear para mostrar
-            ob_mostrar = ob_semaforo[['Cliente', 'descripcion', 'fecha_limite', 'semaforo', 'notas', 'id']].copy()
-            ob_mostrar['fecha_limite'] = ob_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d')
-
-            st.dataframe(
-                ob_mostrar.style.applymap(estilo_semaforo, subset=['semaforo']),
-                use_container_width=True, hide_index=True
+            # Cruzar con cumplimientos del mes
+            df_merged = pd.merge(
+                obligaciones_df,
+                cumplimientos_df,
+                left_on=['id', 'mes_objetivo', 'anio_objetivo'],
+                right_on=['obligacion_id', 'mes', 'anio'],
+                how='left'
             )
             
+            # Calcular estatus
+            ob_semaforo = calcular_semaforo(df_merged)
+
+            # Preparar eventos para el calendario
+            events = []
+            for _, row in ob_semaforo.iterrows():
+                color = "gray"
+                if "A tiempo" in str(row['semaforo']): color = "green"
+                elif "Fuera de tiempo" in str(row['semaforo']): color = "orange"
+                elif "Vencida" in str(row['semaforo']): color = "red"
+                elif "Vence" in str(row['semaforo']): color = "#ccaa00"
+
+                events.append({
+                    "title": f"{row['Cliente']} - {row['descripcion']}",
+                    "start": row['fecha_limite'].strftime('%Y-%m-%d'),
+                    "backgroundColor": color,
+                    "borderColor": color,
+                    "extendedProps": {
+                        "id": row['id_x'],
+                        "cliente": row['Cliente'],
+                        "desc": row['descripcion'],
+                        "semaforo": row['semaforo'],
+                        "mes": row['mes_objetivo'],
+                        "anio": row['anio_objetivo'],
+                        "fecha_limite": row['fecha_limite'].strftime('%Y-%m-%d')
+                    }
+                })
+
+            calendar_options = {
+                "headerToolbar": {
+                    "left": "today prev,next",
+                    "center": "title",
+                    "right": "dayGridMonth,timeGridWeek"
+                },
+                "initialView": "dayGridMonth",
+                "selectable": True,
+            }
+
+            st.write("**Calendario de Vencimientos**")
+            # Mostrar el calendario
+            calendar_dict = st_calendar(events=events, options=calendar_options, key="general_calendar")
+
             st.write("---")
-            st.subheader("Acciones Rápidas")
-            col1, col2 = st.columns(2)
-            with col1:
-                st.write("**Eliminar Obligación**")
-                opciones_act = dict(zip(obligaciones_df['Cliente'] + " - " + obligaciones_df['descripcion'], obligaciones_df['id']))
-                if opciones_act:
-                    obl_a_elim = st.selectbox("Selecciona la obligación a eliminar:", list(opciones_act.keys()), key="sel_elim_gral")
-                    if st.button("Eliminar", key="btn_elim_gral"):
-                        db.eliminar_obligacion(opciones_act[obl_a_elim])
-                        st.rerun()
-                        
+
+            # Tabla interactiva abajo
+            st.subheader("Detalle de Tareas")
+
+            df_mostrar = ob_semaforo.copy()
+            filtro_fecha = None
+
+            if calendar_dict.get("dateClick"):
+                filtro_fecha = calendar_dict["dateClick"]["date"].split("T")[0]
+                st.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
+                df_mostrar = df_mostrar[df_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d') == filtro_fecha]
+            elif calendar_dict.get("eventClick"):
+                evento = calendar_dict["eventClick"]["event"]["extendedProps"]
+                filtro_fecha = evento["fecha_limite"]
+                st.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
+                df_mostrar = df_mostrar[df_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d') == filtro_fecha]
+            else:
+                st.info("Mostrando las próximas 10 tareas pendientes.")
+                df_mostrar = df_mostrar[pd.isna(df_mostrar['fecha_de_entrega'])].sort_values('fecha_limite').head(10)
+                
+            if df_mostrar.empty:
+                st.write("No hay tareas para esta selección.")
+            else:
+                cols_mostrar = ['Cliente', 'descripcion', 'fecha_limite', 'semaforo']
+                df_ui = df_mostrar[cols_mostrar].copy()
+                df_ui['fecha_limite'] = df_ui['fecha_limite'].dt.strftime('%Y-%m-%d')
+                
+                st.dataframe(
+                    df_ui.style.applymap(estilo_semaforo, subset=['semaforo']),
+                    use_container_width=True, hide_index=True
+                )
+
+                # Acciones Rápidas (Marcar como Completada)
+                pendientes = df_mostrar[pd.isna(df_mostrar['fecha_de_entrega'])]
+                if not pendientes.empty:
+                    st.write("**Marcar Obligación como Completada Hoy**")
+                    opciones_act = dict(zip(pendientes['Cliente'] + " - " + pendientes['descripcion'], zip(pendientes['id_x'], pendientes['mes_objetivo'], pendientes['anio_objetivo'])))
+
+                    with st.form("completar_tarea"):
+                        obl_a_act = st.selectbox("Selecciona la obligación completada:", list(opciones_act.keys()))
+                        fecha_ent = st.date_input("Fecha de Entrega", value=hoy)
+                        btn_compl = st.form_submit_button("Registrar Cumplimiento")
+                        if btn_compl:
+                            obl_id, obl_mes, obl_anio = opciones_act[obl_a_act]
+                            db.registrar_cumplimiento(obl_id, obl_mes, obl_anio, fecha_ent)
+                            st.success("Cumplimiento registrado.")
+                            st.rerun()
+
     with tab2:
-        st.subheader("Asignar Nueva Obligación")
+        st.subheader("Gestión de Plantillas (Base)")
         clientes_df = obtener_clientes_permitidos()
-        if clientes_df.empty:
-            st.warning("Primero debes registrar clientes.")
-        else:
-            with st.form("nueva_obligacion"):
-                clientes_df['nombre_display'] = clientes_df['nombre'] + " (" + clientes_df['tipo_persona'] + ")"
-                nombres_clientes = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
-                cliente_seleccionado = st.selectbox("Cliente *", list(nombres_clientes.keys()))
-                
-                obligaciones_comunes = ["Declaración Mensual IVA e ISR", "Declaración Anual", "Cálculo de Nómina y Retenciones", "Envío de DIOT", "Pago SUA/IMSS", "Otro"]
-                descripcion = st.selectbox("Tipo de Obligación", obligaciones_comunes)
-                if descripcion == "Otro": descripcion = st.text_input("Especifica la obligación:")
-                notas = st.text_area("Notas o Detalles de Vencimiento (ej. 'A más tardar el día 17', 'A más tardar el 30 de abril')")
-                dia_habil_extra = st.number_input("Días Hábiles Extra", min_value=0, max_value=5, value=0)
-                enviar_obl = st.form_submit_button("Asignar Obligación")
-                
-                if enviar_obl and descripcion:
-                    db.agregar_obligacion(nombres_clientes[cliente_seleccionado], descripcion, notas, dia_habil_extra)
-                    st.success(f"Obligación asignada exitosamente.")
-                    st.rerun()
+
+        col1, col2 = st.columns([1, 1])
+        with col1:
+             st.write("**Nueva Obligación Base**")
+             if clientes_df.empty:
+                 st.warning("Primero debes registrar clientes.")
+             else:
+                 with st.form("nueva_obligacion"):
+                     clientes_df['nombre_display'] = clientes_df['nombre'] + " (" + clientes_df['tipo_persona'] + ")"
+                     nombres_clientes = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
+                     cliente_seleccionado = st.selectbox("Cliente *", list(nombres_clientes.keys()))
+
+                     obligaciones_comunes = ["Declaración Mensual IVA e ISR", "Declaración Anual", "Cálculo de Nómina y Retenciones", "Envío de DIOT", "Pago SUA/IMSS", "Otro"]
+                     descripcion = st.selectbox("Tipo de Obligación", obligaciones_comunes)
+                     if descripcion == "Otro": descripcion = st.text_input("Especifica la obligación:")
+                     notas = st.text_area("Notas o Detalles de Vencimiento (ej. 'A más tardar el día 17')")
+                     dia_habil_extra = st.number_input("Días Hábiles Extra", min_value=0, max_value=5, value=0)
+                     enviar_obl = st.form_submit_button("Guardar Plantilla")
+
+                     if enviar_obl and descripcion:
+                         db.agregar_obligacion(nombres_clientes[cliente_seleccionado], descripcion, notas, dia_habil_extra)
+                         st.success(f"Plantilla asignada exitosamente.")
+                         st.rerun()
+
+        with col2:
+             st.write("**Eliminar Plantilla Base**")
+             obligaciones_completas_df = db.obtener_obligaciones()
+             if not obligaciones_completas_df.empty:
+                 opc_elim = dict(zip(obligaciones_completas_df['Cliente'] + " - " + obligaciones_completas_df['descripcion'], obligaciones_completas_df['id']))
+                 obl_a_elim = st.selectbox("Selecciona la plantilla a eliminar:", list(opc_elim.keys()), key="sel_elim_gral")
+                 if st.button("Eliminar", key="btn_elim_gral"):
+                     db.eliminar_obligacion(opc_elim[obl_a_elim])
+                     st.success("Plantilla eliminada.")
+                     st.rerun()
 
 elif seleccion == "Cálculo de Impuestos y XML":
     st.title("🧮 Cálculo Automático de Impuestos y Nóminas (XML)")
