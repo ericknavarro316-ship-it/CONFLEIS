@@ -193,6 +193,45 @@ def formatear_lista_vinetas(texto):
     lineas = [linea.strip() for linea in str(texto).split('\n') if linea.strip()]
     return "\n\n".join([f"- {linea}" for linea in lineas])
 
+def formatear_domicilio(domicilio_str):
+    if not domicilio_str or str(domicilio_str).strip() == 'No registrado' or str(domicilio_str).strip() == "None":
+        return "No registrado"
+
+    res = str(domicilio_str)
+
+    keys = {
+        "Código Postal:": "Código Postal:",
+        "Tipode Vialidad:": "Tipo de Vialidad:",
+        "Tipo de Vialidad:": "Tipo de Vialidad:",
+        "Nombrede Vialidad:": "Nombre de Vialidad:",
+        "Nombre de Vialidad:": "Nombre de Vialidad:",
+        "Número Exterior:": "Número Exterior:",
+        "Número Interior:": "Número Interior:",
+        "Nombredela Colonia:": "Nombre de la Colonia:",
+        "Nombre de la Colonia:": "Nombre de la Colonia:",
+        "Nombredela Localidad:": "Nombre de la Localidad:",
+        "Nombre de la Localidad:": "Nombre de la Localidad:",
+        "Nombredel Municipioo Demarcación Territorial:": "Municipio o Demarcación:",
+        "Nombre del Municipio o Demarcación Territorial:": "Municipio o Demarcación:",
+        "Nombredela Entidad Federativa:": "Entidad Federativa:",
+        "Nombre de la Entidad Federativa:": "Entidad Federativa:",
+        "Entre Calle:": "Entre Calle:",
+        "YCalle:": "Y Calle:",
+        "Y Calle:": "Y Calle:",
+    }
+
+    temp_dict = {}
+    for i, (k, v) in enumerate(keys.items()):
+        marker = f"__MARKER_{i}__"
+        if k in res:
+            res = res.replace(k, marker)
+            temp_dict[marker] = v
+
+    for marker, v in temp_dict.items():
+        res = res.replace(marker, f"\n- **{v}** ")
+
+    return res.strip()
+
 def calcular_semaforo(df):
     """Calcula los días restantes y asigna un color al semáforo."""
     if df.empty:
@@ -1033,13 +1072,13 @@ elif seleccion == "Expediente de Cliente":
                  st.info(formatear_lista_vinetas(datos_cliente.get('actividad_economica', 'No registrado')))
 
              with col_f2:
-                 st.markdown("#### Domicilio Registrado")
-                 st.caption(f"**C.P.** {datos_cliente.get('codigo_postal', '')}")
-                 st.write(datos_cliente.get('domicilio', 'No registrado'))
-
                  st.markdown("#### Estado en SAT")
                  st.write(f"**Estatus:** {datos_cliente.get('estatus_padron', '')}")
                  st.write(f"**Inicio de Operaciones:** {datos_cliente.get('fecha_inicio_operaciones', '')}")
+
+             st.markdown("#### Domicilio Registrado")
+             st.caption(f"**C.P.** {datos_cliente.get('codigo_postal', '')}")
+             st.write(formatear_domicilio(datos_cliente.get('domicilio', 'No registrado')))
 
              st.markdown("#### 🗓️ Obligaciones Registradas")
              obs_df = db.obtener_obligaciones(cliente_id=cliente_id)
