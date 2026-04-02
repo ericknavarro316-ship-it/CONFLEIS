@@ -1875,284 +1875,7 @@ elif seleccion == "Gestión de Equipo (Admin)":
         else:
             st.info("Aún no hay movimientos registrados en la bitácora.")
 
-if seleccion == "Descarga Masiva SAT (Simulador)":
-    st.title("☁️ Conexión y Descarga Masiva del SAT")
-    st.write("Módulo avanzado para conectar directamente con los servidores del SAT y descargar todos los XML (Emitidos y Recibidos) y Metadata.")
-    
-    st.info("""
-    **Aviso Técnico y Legal:**
-    La descarga masiva directa desde el portal del SAT (sin captcha) requiere conectarse al **Web Service Oficial del SAT**. 
-    Para establecer este canal seguro, es **estrictamente obligatorio** firmar las peticiones electrónicas utilizando la e.firma (Archivo .CER, Archivo .KEY y Contraseña Privada) del contribuyente.
-    
-    Por razones de seguridad y cumplimiento normativo (Compliance), este entorno demo no almacena ni procesa archivos .KEY reales. 
-    A continuación se muestra la interfaz que utilizarás cuando despliegues este sistema en tu servidor privado seguro.
-    """)
-    
-    clientes_df = obtener_clientes_permitidos()
-    if clientes_df.empty:
-        st.warning("No hay clientes registrados.")
-    else:
-        clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
-        opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
-        cliente_seleccionado = st.selectbox("Selecciona un Cliente para conectar al SAT:", list(opciones_cli.keys()))
-        
-        with st.form("descarga_sat"):
-            st.subheader("Parámetros de Descarga (Web Service)")
-            col1, col2 = st.columns(2)
-            with col1:
-                 fecha_inicio = st.date_input("Fecha Inicial")
-                 tipo_descarga = st.selectbox("Tipo de Comprobantes", ["Emitidos", "Recibidos", "Ambos"])
-            with col2:
-                 fecha_fin = st.date_input("Fecha Final")
-                 tipo_archivo = st.selectbox("Formato de Descarga", ["XML", "Metadata (TXT)"])
-                 
-            st.write("---")
-            st.subheader("Firma de la Solicitud (e.firma obligatoria)")
-            cer_file = st.file_uploader("Certificado (.CER)", type=["cer"])
-            key_file = st.file_uploader("Llave Privada (.KEY)", type=["key"])
-            password = st.text_input("Contraseña de la Llave Privada", type="password")
-            
-            if st.form_submit_button("Conectar y Solicitar Descarga (Simulación)"):
-                if not cer_file or not key_file or not password:
-                    st.error("Error: Para establecer la conexión SOAP con el Web Service del SAT necesitas subir la e.firma completa.")
-                else:
-                    with st.spinner("Autenticando con el SAT... Generando Token... Enviando Solicitud..."):
-                        import time
-                        time.sleep(3) # Simular conexión
-                        st.success("¡Solicitud Aceptada por el SAT! (Simulación)")
-                        st.info(f"El SAT ha recibido tu petición para descargar los XMLs {tipo_descarga} del {fecha_inicio} al {fecha_fin}. El paquete de archivos estará listo para descargar en unos minutos según la disponibilidad de sus servidores.")
-
-elif seleccion == "Expediente de Cliente":
-    st.title("📂 Historial, CRM y Archivo del Cliente")
-    
-    clientes_df = obtener_clientes_permitidos()
-    if clientes_df.empty:
-        st.warning("No hay clientes registrados en el sistema.")
-    else:
-        clientes_df['nombre_display'] = clientes_df['nombre'] + " - " + clientes_df['rfc']
-        opciones_cli = dict(zip(clientes_df['nombre_display'], clientes_df['id']))
-        cliente_seleccionado = st.selectbox("Buscar Cliente:", list(opciones_cli.keys()), key="selectbox_notificaciones")
-        
-        cliente_id = opciones_cli[cliente_seleccionado]
-        datos_cliente = clientes_df[clientes_df['id'] == cliente_id].iloc[0]
-        rfc_cli = datos_cliente['rfc']
-        
-        st.write("---")
-        
-        # Tarjeta Principal del Cliente con Etiquetas CRM
-        col_titulo, col_etiquetas = st.columns([2, 1])
-        with col_titulo:
-            st.subheader(f"👤 {datos_cliente['nombre']}")
-            st.write(f"**RFC:** {rfc_cli} | **Régimen:** {datos_cliente['regimen']}")
-            st.write(f"**Email:** {datos_cliente['email']} | **Teléfono:** {datos_cliente['telefono']}")
-            
-        with col_etiquetas:
-            st.write("**🏷️ Etiquetas CRM:**")
-            etiquetas_actuales = str(datos_cliente.get('etiquetas', ''))
-            if pd.isna(etiquetas_actuales) or not etiquetas_actuales:
-                etiquetas_lista = []
-            else:
-                etiquetas_lista = [e.strip() for e in etiquetas_actuales.split(',') if e.strip()]
-                
-            # Mostrar etiquetas como badges usando HTML de Streamlit
-            if etiquetas_lista:
-                 html_tags = "".join([f'<span style="background-color: #f0f2f6; border-radius: 12px; padding: 4px 10px; margin: 2px; font-size: 12px; border: 1px solid #d1d5db; display: inline-block;">{tag}</span>' for tag in etiquetas_lista])
-                 st.markdown(html_tags, unsafe_allow_html=True)
-            else:
-                 st.caption("Sin etiquetas.")
-                 
-            with st.popover("Editar Etiquetas"):
-                # Opciones sugeridas y texto libre
-                opciones_tags = ["VIP", "Moroso", "Auditoría SAT", "Revisar Nómina", "Documentación Incompleta"]
-                tags_seleccionados = st.multiselect("Selecciona o escribe etiquetas:", options=opciones_tags + etiquetas_lista, default=etiquetas_lista)
-                if st.button("Actualizar Etiquetas"):
-                     nuevo_string = ",".join(tags_seleccionados)
-                     db.actualizar_etiquetas_cliente(cliente_id, nuevo_string)
-                     st.rerun()
-
-        # Pestañas para dividir la vista del Expediente
-        tab_graficas, tab_boveda, tab_archivo, tab_notas = st.tabs([
-             "📊 Finanzas y Gráficas", 
-             "🔐 Bóveda de Accesos", 
-             "📁 Archivo Digital",
-             "📝 Bitácora (Notas)"
-        ])
-        
-        with tab_graficas:
-             st.subheader("Análisis Financiero Histórico")
-             st.caption("Visualización de Ingresos vs Gastos a lo largo del año (Datos Demo).")
-             meses = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun']
-             ingresos_demo = [50000, 60000, 45000, 70000, 65000, 80000]
-             gastos_demo = [30000, 40000, 35000, 50000, 40000, 60000]
-             df_chart = pd.DataFrame({'Mes': meses, 'Ingresos': ingresos_demo, 'Gastos': gastos_demo})
-             fig = px.bar(df_chart, x='Mes', y=['Ingresos', 'Gastos'], barmode='group', color_discrete_map={'Ingresos': 'green', 'Gastos': 'red'})
-             st.plotly_chart(fig, use_container_width=True)
-             
-        with tab_boveda:
-             st.subheader("Accesos y Contraseñas Seguras")
-             cred_df = db.obtener_credenciales(cliente_id)
-             with st.expander("Ver Accesos Guardados"):
-                  if cred_df.empty: st.info("No hay accesos guardados.")
-                  else:
-                      for _, row in cred_df.iterrows():
-                          with st.container(border=True):
-                              ccol1, ccol2, ccol3 = st.columns([2, 2, 1])
-                              with ccol1:
-                                  st.write(f"**{row['tipo_acceso']}**: {row['usuario']}")
-                              with ccol2:
-                                  if st.checkbox("Mostrar Contraseña", key=f"show_pw_{row['id']}"): st.code(row['contrasena'])
-                                  else: st.code("********")
-                                  if row['notas']: st.caption(f"Notas: {row['notas']}")
-                              with ccol3:
-                                  if st.button("Eliminar", key=f"del_cred_{row['id']}"):
-                                      db.eliminar_credencial(row['id'])
-                                      st.rerun()
-                                      
-             with st.expander("Agregar Nuevo Acceso"):
-                  with st.form("nueva_credencial"):
-                      tipo_acceso = st.selectbox("Tipo de Acceso", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Otro"])
-                      usuario = st.text_input("Usuario / RFC")
-                      contrasena = st.text_input("Contraseña", type="password")
-                      notas = st.text_input("Notas / Vencimiento")
-                      if st.form_submit_button("Guardar Acceso Seguramente") and tipo_acceso and contrasena:
-                           db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
-                           st.rerun()
-                           
-        with tab_archivo:
-             st.subheader("Gestor Documental Seguro")
-             st.write("Sube y administra los documentos oficiales importantes de este cliente.")
-             
-             # Crear directorio específico del cliente usando su RFC
-             dir_cliente = os.path.join(ARCHIVOS_DIR, rfc_cli)
-             os.makedirs(dir_cliente, exist_ok=True)
-             
-             col_upload, col_list = st.columns([1, 1])
-             with col_upload:
-                  st.write("**Subir Nuevo Documento**")
-                  tipo_doc = st.selectbox("Tipo de Documento", ["Acta Constitutiva", "INE Representante Legal", "Comprobante de Domicilio", "Acuse SAT", "Contrato", "Otro"])
-                  uploaded_doc = st.file_uploader("Seleccionar PDF", type=["pdf"], key="upload_doc")
-                  if st.button("Guardar en Archivo") and uploaded_doc:
-                       # Limpiar nombre de archivo seguro
-                       safe_name = f"{tipo_doc.replace(' ', '_')}_{datetime.today().strftime('%Y%m%d')}.pdf"
-                       file_path = os.path.join(dir_cliente, safe_name)
-                       with open(file_path, "wb") as f:
-                           f.write(uploaded_doc.getbuffer())
-                       st.success("Documento guardado localmente.")
-                       st.rerun()
-                       
-             with col_list:
-                  st.write("**Documentos en el Archivo Digital**")
-                  archivos = os.listdir(dir_cliente)
-                  if not archivos:
-                       st.info("La carpeta está vacía.")
-                  else:
-                       for f in archivos:
-                            f_path = os.path.join(dir_cliente, f)
-                            with st.container(border=True):
-                                col_f1, col_f2 = st.columns([3, 1])
-                                col_f1.write(f"📄 {f}")
-                                with open(f_path, "rb") as file_data:
-                                     col_f2.download_button("Descargar", data=file_data, file_name=f, mime="application/pdf", key=f"dl_{f}")
-                                     
-        with tab_notas:
-             st.subheader("Muro de Notas (Bitácora)")
-             
-             with st.form("nueva_nota"):
-                  nueva_nota = st.text_area("Escribe una nueva nota o recordatorio de interacción...")
-                  if st.form_submit_button("Publicar Nota") and nueva_nota:
-                       db.agregar_nota_crm(cliente_id, nueva_nota)
-                       st.rerun()
-                       
-             # Mostrar historial de notas
-             notas_df = db.obtener_notas_crm(cliente_id)
-             if notas_df.empty:
-                  st.caption("No hay notas registradas para este cliente.")
-             else:
-                  for _, n_row in notas_df.iterrows():
-                       st.info(f"**{n_row['fecha']}** - {n_row['autor']}\n\n{n_row['contenido']}")
-                       # Botón pequeño de eliminar
-                       if st.button("Eliminar nota", key=f"del_nota_{n_row['id']}", type="tertiary"):
-                            db.eliminar_nota_crm(n_row['id'])
-                            st.rerun()
-
-elif seleccion == "Portal del Cliente (Login)":
-    st.title("🔐 Acceso para Clientes")
-    st.write("Ingresa tu RFC y la contraseña proporcionada por tu contador para acceder a tu información fiscal.")
-    
-    with st.form("login_form"):
-        rfc_login = st.text_input("RFC")
-        pwd_login = st.text_input("Contraseña", type="password")
-        if st.form_submit_button("Ingresar"):
-            if not rfc_login or not pwd_login:
-                st.error("Por favor llena ambos campos.")
-            else:
-                cliente_data = db.verificar_login_cliente(rfc_login, pwd_login)
-                if cliente_data:
-                    st.session_state.logged_in_client = {'id': cliente_data[0], 'nombre': cliente_data[1], 'rfc': rfc_login.upper()}
-                    st.rerun()
-                else:
-                    st.error("Credenciales incorrectas. Verifica tu RFC y contraseña.")
-
-elif seleccion == "Mi Portal (Cliente)":
-    cliente_info = st.session_state.logged_in_client
-    st.title(f"🏢 Bienvenido, {cliente_info['nombre']}")
-    st.write(f"**RFC:** {cliente_info['rfc']}")
-    
-    tab1, tab2 = st.tabs(["Mis Obligaciones y Alertas", "Enviar Documentos al Contador"])
-    
-    with tab1:
-        st.subheader("Semáforo Fiscal")
-        st.write("Estas son tus obligaciones fiscales vigentes y su estado actual:")
-        mis_obligaciones = db.obtener_obligaciones(cliente_id=cliente_info['id'])
-        if mis_obligaciones.empty:
-             st.info("No tienes obligaciones pendientes en este momento.")
-        else:
-             ob_semaforo = calcular_semaforo(mis_obligaciones)
-             cols_to_show = ['semaforo', 'descripcion', 'fecha_limite', 'estado']
-             st.dataframe(
-                 ob_semaforo[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
-                 use_container_width=True, hide_index=True
-             )
-             
-    with tab2:
-        st.subheader("Buzón Seguro")
-        st.write("Sube tus estados de cuenta, facturas o comprobantes. El despacho los recibirá inmediatamente en tu expediente.")
-        
-        doc_upload = st.file_uploader("Seleccionar Archivo (PDF, Excel, Imágenes)", key="client_upload")
-        if st.button("Enviar al Despacho") and doc_upload:
-             dir_cliente = os.path.join(ARCHIVOS_DIR, cliente_info['rfc'])
-             os.makedirs(dir_cliente, exist_ok=True)
-             safe_name = f"PORTAL_{datetime.today().strftime('%Y%m%d_%H%M%S')}_{doc_upload.name.replace(' ', '_')}"
-             file_path = os.path.join(dir_cliente, safe_name)
-             
-             with open(file_path, "wb") as f:
-                 f.write(doc_upload.getbuffer())
-                 
-             db.registrar_documento_portal(cliente_info['id'], doc_upload.name, file_path)
-             st.success("¡Documento enviado exitosamente! Tu contador ha sido notificado.")
-
-elif seleccion == "🤖 Asistente Fiscal AI":
-    st.title("🤖 Asistente Fiscal con Inteligencia Artificial")
-    st.write("Pregúntame sobre topes de deducciones, viáticos, recargos o tasas de impuestos (RESICO).")
-    
-    for msg in st.session_state.chat_history:
-        with st.chat_message(msg["role"]):
-            st.markdown(msg["content"])
-            
-    if prompt := st.chat_input("Escribe tu duda fiscal aquí... (Ej. '¿Cuál es el tope para deducir un automóvil?')"):
-        # Agregar mensaje de usuario
-        st.session_state.chat_history.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
-            
-        # Generar respuesta de AI
-        respuesta_ai = ai.obtener_respuesta_fiscal(prompt)
-        
-        # Mostrar y guardar respuesta
-        with st.chat_message("assistant"):
-            st.markdown(respuesta_ai)
-        st.session_state.chat_history.append({"role": "assistant", "content": respuesta_ai})
-
+elif seleccion == "Notificaciones a Clientes":
     st.title("📲 Panel de Notificaciones (WhatsApp / Email)")
     st.write("Envía recordatorios masivos a tus clientes sobre pagos o estados de cuenta.")
     
@@ -2183,7 +1906,7 @@ elif seleccion == "🤖 Asistente Fiscal AI":
 
 # --- Nuevos Módulos Fase 8 ---
 
-if seleccion == "Agenda y Citas":
+elif seleccion == "Agenda y Citas":
     st.title("📅 Agenda del Despacho")
     st.write("Programa reuniones y entregas de documentos con tus clientes.")
     
@@ -2230,7 +1953,7 @@ if seleccion == "Agenda y Citas":
             st.write("No hay citas programadas.")
 
 
-if seleccion == "Facturación (CFDI)":
+elif seleccion == "Facturación (CFDI)":
     st.title("🧾 Emisor de Facturas CFDI (Simulador)")
     st.write("Genera el PDF y XML de una factura para enviarla al cliente.")
     
@@ -2256,7 +1979,7 @@ if seleccion == "Facturación (CFDI)":
         st.info("Debes registrar al menos un cliente.")
 
 
-if seleccion == "Tablero Kanban (Staff)":
+elif seleccion == "Tablero Kanban (Staff)":
     st.title("📋 Tablero de Tareas (Kanban)")
     st.write("Gestiona el flujo de trabajo del despacho y asigna tareas a tu equipo.")
     
@@ -2350,7 +2073,7 @@ if seleccion == "Tablero Kanban (Staff)":
                         st.rerun()
 
 
-if seleccion == "Envío de Líneas de Captura":
+elif seleccion == "Envío de Líneas de Captura":
     st.title("💸 Envío de Líneas de Captura")
     st.write("Sube el Acuse de Recibo del SAT y el sistema notificará automáticamente al cliente para su pago.")
     
