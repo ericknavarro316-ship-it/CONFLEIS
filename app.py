@@ -185,6 +185,14 @@ else:
 seleccion = st.sidebar.radio("Ir a:", opciones)
 
 # ---------- Funciones Auxiliares para el Semáforo ----------
+
+def formatear_lista_vinetas(texto):
+    if not texto or str(texto).strip() == "No registrado" or str(texto).strip() == "None":
+        return "No registrado"
+    # Separar por saltos de línea y crear viñetas
+    lineas = [linea.strip() for linea in str(texto).split('\n') if linea.strip()]
+    return "\n\n".join([f"- {linea}" for linea in lineas])
+
 def calcular_semaforo(df):
     """Calcula los días restantes y asigna un color al semáforo."""
     if df.empty:
@@ -1019,10 +1027,10 @@ elif seleccion == "Expediente de Cliente":
              col_f1, col_f2 = st.columns(2)
              with col_f1:
                  st.markdown("#### Regímenes Fiscales")
-                 st.info(datos_cliente.get('regimen', 'No registrado'))
+                 st.info(formatear_lista_vinetas(datos_cliente.get('regimen', 'No registrado')))
 
                  st.markdown("#### Actividades Económicas")
-                 st.info(datos_cliente.get('actividad_economica', 'No registrado'))
+                 st.info(formatear_lista_vinetas(datos_cliente.get('actividad_economica', 'No registrado')))
 
              with col_f2:
                  st.markdown("#### Domicilio Registrado")
