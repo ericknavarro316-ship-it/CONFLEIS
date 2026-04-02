@@ -121,9 +121,8 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             cliente_id INTEGER,
             descripcion TEXT NOT NULL,
-            fecha_limite DATE NOT NULL,
-            estado TEXT NOT NULL DEFAULT 'Pendiente',
             notas TEXT,
+            dia_habil_extra INTEGER DEFAULT 0,
             FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE
         )
     ''')
@@ -733,20 +732,20 @@ def obtener_documentos_portal(cliente_id):
 
 # --- Funciones para Obligaciones ---
 
-def agregar_obligacion(cliente_id, descripcion, fecha_limite, notas=""):
+def agregar_obligacion(cliente_id, descripcion, notas="", dia_habil_extra=0):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
-        INSERT INTO obligaciones (cliente_id, descripcion, fecha_limite, notas)
+        INSERT INTO obligaciones (cliente_id, descripcion, notas, dia_habil_extra)
         VALUES (?, ?, ?, ?)
-    ''', (cliente_id, descripcion, fecha_limite, notas))
+    ''', (cliente_id, descripcion, notas, dia_habil_extra))
     conn.commit()
     conn.close()
 
 def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
     query = '''
-        SELECT o.id, c.nombre as Cliente, o.descripcion, o.fecha_limite, o.estado, o.notas
+        SELECT o.id, c.nombre as Cliente, o.descripcion, o.notas, o.dia_habil_extra, c.id as cliente_id, c.rfc
         FROM obligaciones o
         JOIN clientes c ON o.cliente_id = c.id
         WHERE 1=1
@@ -759,20 +758,11 @@ def obtener_obligaciones(tipo_persona=None, cliente_id=None):
         query += " AND c.id = ?"
         params.append(cliente_id)
         
-    query += " ORDER BY o.fecha_limite ASC"
+    query += " ORDER BY c.nombre ASC"
     df = pd.read_sql_query(query, conn, params=tuple(params))
-    
-    if not df.empty:
-        df['fecha_limite'] = pd.to_datetime(df['fecha_limite']).dt.date
     conn.close()
     return df
 
-def actualizar_estado_obligacion(obligacion_id, nuevo_estado):
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("UPDATE obligaciones SET estado = ? WHERE id = ?", (nuevo_estado, obligacion_id))
-    conn.commit()
-    conn.close()
 
 def eliminar_obligacion(obligacion_id):
     conn = sqlite3.connect(DB_NAME)
