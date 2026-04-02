@@ -99,6 +99,9 @@ def init_db():
     if 'estatus_padron' not in columns:
         try: cursor.execute("ALTER TABLE clientes ADD COLUMN estatus_padron TEXT DEFAULT ''")
         except: pass
+    if 'domicilio' not in columns:
+        try: cursor.execute("ALTER TABLE clientes ADD COLUMN domicilio TEXT DEFAULT ''")
+        except: pass
 
     # Tabla de Documentos Compartidos (Cliente -> Contador)
     cursor.execute('''
@@ -636,14 +639,14 @@ def eliminar_linea_captura(linea_id):
 
 # --- Funciones para Clientes ---
 
-def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas="", servicio_principal_id=None, codigo_postal="", curp="", actividad_economica="", fecha_inicio_operaciones="", estatus_padron=""):
+def agregar_cliente(nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas="", servicio_principal_id=None, codigo_postal="", curp="", actividad_economica="", fecha_inicio_operaciones="", estatus_padron="", domicilio=""):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute('''
-            INSERT INTO clientes (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas, servicio_principal_id, codigo_postal, curp, actividad_economica, fecha_inicio_operaciones, estatus_padron)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas, servicio_principal_id, codigo_postal, curp, actividad_economica, fecha_inicio_operaciones, estatus_padron))
+            INSERT INTO clientes (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas, servicio_principal_id, codigo_postal, curp, actividad_economica, fecha_inicio_operaciones, estatus_padron, domicilio)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, etiquetas, servicio_principal_id, codigo_postal, curp, actividad_economica, fecha_inicio_operaciones, estatus_padron, domicilio))
         conn.commit()
         obtener_clientes.clear()
         return True, "Cliente agregado exitosamente."
@@ -672,15 +675,15 @@ def eliminar_cliente(cliente_id):
     conn.close()
     obtener_clientes.clear()
 
-def actualizar_cliente(cliente_id, nombre, rfc, tipo_persona, regimen, email, telefono, servicio_principal_id=None, codigo_postal="", curp="", actividad_economica="", fecha_inicio_operaciones="", estatus_padron=""):
+def actualizar_cliente(cliente_id, nombre, rfc, tipo_persona, regimen, email, telefono, servicio_principal_id=None, codigo_postal="", curp="", actividad_economica="", fecha_inicio_operaciones="", estatus_padron="", domicilio=""):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute('''
             UPDATE clientes
-            SET nombre=?, rfc=?, tipo_persona=?, regimen=?, email=?, telefono=?, servicio_principal_id=?, codigo_postal=?, curp=?, actividad_economica=?, fecha_inicio_operaciones=?, estatus_padron=?
+            SET nombre=?, rfc=?, tipo_persona=?, regimen=?, email=?, telefono=?, servicio_principal_id=?, codigo_postal=?, curp=?, actividad_economica=?, fecha_inicio_operaciones=?, estatus_padron=?, domicilio=?
             WHERE id=?
-        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, servicio_principal_id, codigo_postal, curp, actividad_economica, fecha_inicio_operaciones, estatus_padron, cliente_id))
+        ''', (nombre, rfc, tipo_persona, regimen, email, telefono, servicio_principal_id, codigo_postal, curp, actividad_economica, fecha_inicio_operaciones, estatus_padron, domicilio, cliente_id))
         conn.commit()
         obtener_clientes.clear()
         return True, "Cliente actualizado exitosamente."
