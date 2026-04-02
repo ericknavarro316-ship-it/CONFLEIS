@@ -152,12 +152,22 @@ def extraer_datos_constancia(pdf_file):
         block = act_block.group(1)
         for line in block.split('\n'):
             line = line.strip()
-            match = re.search(r"^\d+\s+(.*?)(?:\s+\d+|\d+)\s+\d{2}/\d{2}/\d{4}", line)
+            # Try to match with the percentage included
+            match = re.search(r"^\d+\s+(.*?)\s+(\d+)\s+\d{2}/\d{2}/\d{4}", line)
             if match:
                 act = match.group(1).strip()
+                pct = match.group(2).strip()
                 if act:
                     act = re.sub(r'\d+$', '', act).strip()
-                    actividades.append(act)
+                    actividades.append(f"{act} ({pct}%)")
+            else:
+                # Fallback without percentage
+                match_fallback = re.search(r"^\d+\s+(.*?)(?:\s+\d+|\d+)\s+\d{2}/\d{2}/\d{4}", line)
+                if match_fallback:
+                    act = match_fallback.group(1).strip()
+                    if act:
+                        act = re.sub(r'\d+$', '', act).strip()
+                        actividades.append(act)
     else:
         act_alt_match = re.search(r"Actividad\s*Económica:\s*([^\n]+)", texto_espaciado, re.IGNORECASE)
         if act_alt_match:
