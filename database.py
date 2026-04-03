@@ -952,3 +952,23 @@ def eliminar_departamento(id):
         return True, "Departamento eliminado."
     except Exception as e:
         return False, str(e)
+
+def obtener_dias_festivos():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM dias_festivos ORDER BY fecha ASC", conn)
+    conn.close()
+    return df
+
+def agregar_dia_festivo(fecha, descripcion):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO dias_festivos (fecha, descripcion) VALUES (?, ?)", (fecha, descripcion))
+    conn.commit()
+    conn.close()
+
+def eliminar_dia_festivo(id_festivo):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM dias_festivos WHERE id = ?", (id_festivo,))
+    conn.commit()
+    conn.close()

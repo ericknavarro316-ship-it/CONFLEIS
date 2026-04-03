@@ -554,7 +554,7 @@ elif seleccion == "Dashboard":
             st.success("¡Todo al día! No hay obligaciones urgentes próximas a vencer.")
         else:
             st.dataframe(
-                alertas.style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                alertas.style.map(estilo_semaforo, subset=['semaforo', 'estado']),
                 use_container_width=True, hide_index=True
             )
     else:
@@ -616,7 +616,7 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
         if not obligaciones_df.empty:
              ob_semaforo = calcular_semaforo(obligaciones_df)
              st.dataframe(
-                 ob_semaforo.style.applymap(estilo_semaforo, subset=['semaforo', 'estado']),
+                 ob_semaforo.style.map(estilo_semaforo, subset=['semaforo', 'estado']),
                  use_container_width=True, hide_index=True
              )
 
@@ -768,6 +768,10 @@ elif seleccion == "Calendario General":
             import calendar
             hoy = date.today()
 
+            # Cargar días festivos desde BD
+            df_festivos = db.obtener_dias_festivos()
+            festivos_lista = df_festivos['fecha'].tolist() if not df_festivos.empty else []
+
             col_mes, col_anio = st.columns(2)
             meses_nombres = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"]
 
@@ -801,12 +805,12 @@ elif seleccion == "Calendario General":
                     ultimo_dia = calendar.monthrange(y, m)[1]
                     base_date = date(y, m, ultimo_dia)
 
-                while base_date.weekday() >= 5:
+                while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
                     base_date += timedelta(days=1)
 
                 for _ in range(dias_extra):
                     base_date += timedelta(days=1)
-                    while base_date.weekday() >= 5:
+                    while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
                         base_date += timedelta(days=1)
 
                 fechas_limite.append(base_date)
@@ -878,12 +882,18 @@ elif seleccion == "Calendario General":
 
             if calendar_dict.get("dateClick"):
                 filtro_fecha = calendar_dict["dateClick"]["date"].split("T")[0]
-                st.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
+                col_info, col_btn = st.columns([3, 1])
+                col_info.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
+                if col_btn.button("Ver todo el mes", use_container_width=True):
+                    st.rerun()
                 df_mostrar = df_mostrar[df_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d') == filtro_fecha]
             elif calendar_dict.get("eventClick"):
                 evento = calendar_dict["eventClick"]["event"]["extendedProps"]
                 filtro_fecha = evento["fecha_limite"]
-                st.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
+                col_info, col_btn = st.columns([3, 1])
+                col_info.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
+                if col_btn.button("Ver todo el mes", use_container_width=True):
+                    st.rerun()
                 df_mostrar = df_mostrar[df_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d') == filtro_fecha]
             else:
                 st.info(f"Mostrando tareas pendientes para {mes_seleccionado_nombre} {anio_actual}.")
@@ -897,7 +907,7 @@ elif seleccion == "Calendario General":
                 df_ui['fecha_limite'] = df_ui['fecha_limite'].dt.strftime('%Y-%m-%d')
                 
                 st.dataframe(
-                    df_ui.style.applymap(estilo_semaforo, subset=['semaforo']),
+                    df_ui.style.map(estilo_semaforo, subset=['semaforo']),
                     use_container_width=True, hide_index=True
                 )
 
@@ -1452,7 +1462,7 @@ elif seleccion == "Mi Portal (Cliente)":
              ob_semaforo['fecha_limite'] = ob_semaforo['fecha_limite'].dt.strftime('%Y-%m-%d')
              cols_to_show = ['semaforo', 'descripcion', 'fecha_limite']
              st.dataframe(
-                 ob_semaforo[cols_to_show].style.applymap(estilo_semaforo, subset=['semaforo']),
+                 ob_semaforo[cols_to_show].style.map(estilo_semaforo, subset=['semaforo']),
                  use_container_width=True, hide_index=True
              )
              
@@ -1522,7 +1532,7 @@ elif seleccion == "Control de Honorarios":
                     color = 'green' if val == 'Pagado' else 'red'
                     return f'color: {color}'
                     
-                st.dataframe(df_mostrar.style.applymap(color_cobranza, subset=['Estado']), use_container_width=True, hide_index=True)
+                st.dataframe(df_mostrar.style.map(color_cobranza, subset=['Estado']), use_container_width=True, hide_index=True)
                 
                 st.write("---")
                 col1, col2 = st.columns(2)
