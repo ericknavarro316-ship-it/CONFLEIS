@@ -320,6 +320,77 @@ def extraer_actividad_principal(actividad_str):
 
     return highest_act
 
+
+def procesar_obligaciones_del_mes(df_obligaciones, mes_objetivo=None, anio_objetivo=None):
+    if df_obligaciones.empty:
+        return df_obligaciones
+
+    from datetime import date, timedelta
+    import calendar
+    import pandas as pd
+
+    hoy = date.today()
+    m = mes_objetivo if mes_objetivo else hoy.month
+    y = anio_objetivo if anio_objetivo else hoy.year
+
+    # Cargar días festivos desde BD para el cálculo
+    import database as db
+    df_festivos = db.obtener_dias_festivos()
+    festivos_lista = df_festivos['fecha'].tolist() if not df_festivos.empty else []
+
+    fechas_limite = []
+    para_mes = []
+    para_anio = []
+
+    for _, row in df_obligaciones.iterrows():
+        notas_venc = row.get("notas", "")
+        if not isinstance(notas_venc, str):
+            notas_venc = ""
+
+        rfc_cliente = str(row.get("rfc", ""))
+        dias_extra = int(row.get("dia_habil_extra", 0))
+
+        if "17" in notas_venc:
+            base_date = date(y, m, 17)
+        elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
+            mes_lim = 4 if len(rfc_cliente) == 13 else 3
+            base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
+        else:
+            ultimo_dia = calendar.monthrange(y, m)[1]
+            base_date = date(y, m, ultimo_dia)
+
+        while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
+            base_date += timedelta(days=1)
+
+        for _ in range(dias_extra):
+            base_date += timedelta(days=1)
+            while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
+                base_date += timedelta(days=1)
+
+        fechas_limite.append(base_date)
+        para_mes.append(m)
+        para_anio.append(y)
+
+    df_out = df_obligaciones.copy()
+    df_out['fecha_limite'] = pd.to_datetime(fechas_limite)
+    df_out['mes_objetivo'] = para_mes
+    df_out['anio_objetivo'] = para_anio
+
+    # Cruzar con cumplimientos
+    cumplimientos_df = db.obtener_cumplimientos()
+    if not cumplimientos_df.empty:
+        df_merged = pd.merge(
+            df_out,
+            cumplimientos_df,
+            left_on=['id', 'mes_objetivo', 'anio_objetivo'],
+            right_on=['obligacion_id', 'mes', 'anio'],
+            how='left'
+        )
+        return df_merged
+    else:
+        df_out['fecha_de_entrega'] = pd.NA
+        return df_out
+
 def calcular_semaforo(df):
     """Calcula los días restantes y asigna un color al semáforo (incluyendo cumplimientos)."""
     if df.empty:
@@ -581,6 +652,7 @@ elif seleccion == "Dashboard":
     st.write("---")
     st.subheader("⚠️ Alertas de Obligaciones Próximas o Vencidas")
     if not obligaciones_df.empty:
+        obligaciones_df = procesar_obligaciones_del_mes(obligaciones_df)
         ob_semaforo = calcular_semaforo(obligaciones_df)
         alertas = ob_semaforo[(ob_semaforo['estado'] == 'Pendiente') &
                               (ob_semaforo['semaforo'].str.startswith('🔴') | ob_semaforo['semaforo'].str.startswith('🟠'))]
@@ -648,6 +720,7 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
         st.subheader("Obligaciones (Semáforo Fiscal)")
         obligaciones_df = db.obtener_obligaciones(tipo_persona)
         if not obligaciones_df.empty:
+             obligaciones_df = procesar_obligaciones_del_mes(obligaciones_df)
              ob_semaforo = calcular_semaforo(obligaciones_df)
              st.dataframe(
                  ob_semaforo.style.map(estilo_semaforo, subset=['semaforo', 'estado']),
@@ -815,56 +888,7 @@ elif seleccion == "Calendario General":
             with col_anio:
                 anio_actual = st.selectbox("Año a visualizar:", range(hoy.year - 1, hoy.year + 3), index=1)
 
-            fechas_limite = []
-            para_mes = []
-            para_anio = []
-            for _, row in obligaciones_df.iterrows():
-                notas_venc = row.get("notas", "")
-                if not isinstance(notas_venc, str):
-                    notas_venc = ""
-
-                rfc_cliente = str(row.get("rfc", ""))
-                dias_extra = int(row.get("dia_habil_extra", 0))
-
-                # Se calcula para el mes actual
-                m = mes_actual
-                y = anio_actual
-
-                if "17" in notas_venc:
-                    base_date = date(y, m, 17)
-                elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
-                    mes_lim = 4 if len(rfc_cliente) == 13 else 3
-                    base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
-                else:
-                    ultimo_dia = calendar.monthrange(y, m)[1]
-                    base_date = date(y, m, ultimo_dia)
-
-                while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
-                    base_date += timedelta(days=1)
-
-                for _ in range(dias_extra):
-                    base_date += timedelta(days=1)
-                    while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
-                        base_date += timedelta(days=1)
-
-                fechas_limite.append(base_date)
-                para_mes.append(m)
-                para_anio.append(y)
-
-            obligaciones_df['fecha_limite'] = pd.to_datetime(fechas_limite)
-            obligaciones_df['mes_objetivo'] = para_mes
-            obligaciones_df['anio_objetivo'] = para_anio
-
-            # Cruzar con cumplimientos del mes
-            df_merged = pd.merge(
-                obligaciones_df,
-                cumplimientos_df,
-                left_on=['id', 'mes_objetivo', 'anio_objetivo'],
-                right_on=['obligacion_id', 'mes', 'anio'],
-                how='left'
-            )
-
-            # Calcular estatus
+            df_merged = procesar_obligaciones_del_mes(obligaciones_df, mes_objetivo=mes_actual, anio_objetivo=anio_actual)
             ob_semaforo = calcular_semaforo(df_merged)
 
             # Preparar eventos para el calendario
@@ -1487,30 +1511,7 @@ elif seleccion == "Mi Portal (Cliente)":
              from datetime import date, timedelta
              import calendar
              hoy = date.today()
-             fechas_limite = []
-             for _, row in mis_obligaciones.iterrows():
-                 notas_venc = str(row.get("notas", ""))
-                 dias_extra = int(row.get("dia_habil_extra", 0))
-                 rfc_cli = str(row.get("rfc", ""))
-                 if "17" in notas_venc:
-                     m = hoy.month + 1 if hoy.month < 12 else 1
-                     y = hoy.year if hoy.month < 12 else hoy.year + 1
-                     base_date = date(y, m, 17)
-                 elif "anual" in notas_venc.lower() or "abril" in notas_venc.lower() or "marzo" in notas_venc.lower():
-                     mes_lim = 4 if len(rfc_cli) == 13 else 3
-                     y = hoy.year + 1 if hoy.month > mes_lim else hoy.year
-                     base_date = date(y, mes_lim, 30 if mes_lim == 4 else 31)
-                 else:
-                     ultimo_dia = calendar.monthrange(hoy.year, hoy.month)[1]
-                     base_date = date(hoy.year, hoy.month, ultimo_dia)
-                 while base_date.weekday() >= 5:
-                     base_date += timedelta(days=1)
-                 for _ in range(dias_extra):
-                     base_date += timedelta(days=1)
-                     while base_date.weekday() >= 5:
-                         base_date += timedelta(days=1)
-                 fechas_limite.append(base_date)
-             mis_obligaciones['fecha_limite'] = pd.to_datetime(fechas_limite)
+             mis_obligaciones = procesar_obligaciones_del_mes(mis_obligaciones)
              ob_semaforo = calcular_semaforo(mis_obligaciones)
              ob_semaforo['fecha_limite'] = ob_semaforo['fecha_limite'].dt.strftime('%Y-%m-%d')
              cols_to_show = ['semaforo', 'descripcion', 'fecha_limite']
