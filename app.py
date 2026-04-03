@@ -19,6 +19,9 @@ st.set_page_config(page_title="Sistema Contable de Despacho", page_icon="📈", 
 # Inicializar Base de Datos
 db.init_db()
 
+if 'cal_key_suffix' not in st.session_state:
+    st.session_state['cal_key_suffix'] = 0
+
 # Importar módulos de Fase 4 y 5 (DIOT, Conciliación, Portal y IA)
 import diot_generator as diot
 import bank_reconciliation as br
@@ -401,6 +404,37 @@ if seleccion == "Configuración de Marca":
             if st.form_submit_button("Guardar Colores"):
                 db.actualizar_configuracion(conf.get('logo'), color1, color2, color3)
                 st.success("Colores guardados. Actualiza la página para ver los cambios.")
+
+    st.write("---")
+    st.subheader("🏖️ Configuración de Días Festivos")
+    st.write("Agrega los días que tu despacho no labora. El sistema los saltará automáticamente al calcular los vencimientos fiscales.")
+
+    col_f1, col_f2 = st.columns([1, 2])
+    with col_f1:
+        with st.form("form_festivo"):
+            f_fecha = st.date_input("Fecha inhábil")
+            f_desc = st.text_input("Motivo (ej. Viernes Santo)")
+            if st.form_submit_button("Agregar Día Inhábil"):
+                if f_desc:
+                    db.agregar_dia_festivo(f_fecha.strftime('%Y-%m-%d'), f_desc)
+                    st.success("Día inhábil guardado.")
+                    st.rerun()
+                else:
+                    st.error("Ingresa un motivo.")
+
+    with col_f2:
+        df_festivos = db.obtener_dias_festivos()
+        if not df_festivos.empty:
+            st.dataframe(df_festivos[['fecha', 'descripcion']], hide_index=True)
+            with st.expander("Eliminar un día festivo"):
+                op_elim = dict(zip(df_festivos['fecha'] + " - " + df_festivos['descripcion'], df_festivos['id']))
+                f_elim = st.selectbox("Selecciona:", list(op_elim.keys()))
+                if st.button("Eliminar"):
+                    db.eliminar_dia_festivo(op_elim[f_elim])
+                    st.rerun()
+        else:
+            st.info("No hay días festivos registrados.")
+
 
 if seleccion == "Mi Despacho (Finanzas)":
     st.title("💼 Dashboard Ejecutivo del Despacho")
@@ -870,7 +904,7 @@ elif seleccion == "Calendario General":
 
             st.write("**Calendario de Vencimientos**")
             # Mostrar el calendario
-            calendar_dict = st_calendar(events=events, options=calendar_options, key="general_calendar")
+            calendar_dict = st_calendar(events=events, options=calendar_options, key=f"general_calendar_{st.session_state['cal_key_suffix']}")
 
             st.write("---")
 
@@ -884,7 +918,8 @@ elif seleccion == "Calendario General":
                 filtro_fecha = calendar_dict["dateClick"]["date"].split("T")[0]
                 col_info, col_btn = st.columns([3, 1])
                 col_info.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
-                if col_btn.button("Ver todo el mes", use_container_width=True):
+                if col_btn.button("Ver todo el mes", use_container_width=True, key="btn_clear_1"):
+                    st.session_state['cal_key_suffix'] += 1
                     st.rerun()
                 df_mostrar = df_mostrar[df_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d') == filtro_fecha]
             elif calendar_dict.get("eventClick"):
@@ -892,7 +927,8 @@ elif seleccion == "Calendario General":
                 filtro_fecha = evento["fecha_limite"]
                 col_info, col_btn = st.columns([3, 1])
                 col_info.info(f"Mostrando actividades para la fecha: {filtro_fecha}")
-                if col_btn.button("Ver todo el mes", use_container_width=True):
+                if col_btn.button("Ver todo el mes", use_container_width=True, key="btn_clear_2"):
+                    st.session_state['cal_key_suffix'] += 1
                     st.rerun()
                 df_mostrar = df_mostrar[df_mostrar['fecha_limite'].dt.strftime('%Y-%m-%d') == filtro_fecha]
             else:
@@ -902,29 +938,46 @@ elif seleccion == "Calendario General":
             if df_mostrar.empty:
                 st.write("No hay tareas para esta selección.")
             else:
-                cols_mostrar = ['Cliente', 'descripcion', 'fecha_limite', 'semaforo']
+                st.write("**Marcado Rápido**")
+                cols_mostrar = ['Cliente', 'descripcion', 'fecha_limite', 'semaforo', 'id_x', 'mes_objetivo', 'anio_objetivo']
                 df_ui = df_mostrar[cols_mostrar].copy()
                 df_ui['fecha_limite'] = df_ui['fecha_limite'].dt.strftime('%Y-%m-%d')
+                df_ui.insert(0, 'Completar', False)
+
+                # Column configuration for editable dataframe
+                column_config = {
+                    "Completar": st.column_config.CheckboxColumn(
+                        "✅ Completar", help="Marca para establecer como completada hoy", default=False
+                    ),
+                    "id_x": None,
+                    "mes_objetivo": None,
+                    "anio_objetivo": None
+                }
                 
-                st.dataframe(
-                    df_ui.style.map(estilo_semaforo, subset=['semaforo']),
-                    use_container_width=True, hide_index=True
+                df_edited = st.data_editor(
+                    df_ui,
+                    column_config=column_config,
+                    disabled=["Cliente", "descripcion", "fecha_limite", "semaforo"],
+                    hide_index=True,
+                    use_container_width=True,
+                    key="data_editor_tareas"
                 )
 
                 # Acciones Rápidas (Marcar como Completada)
-                pendientes = df_mostrar[pd.isna(df_mostrar['fecha_de_entrega'])]
-                if not pendientes.empty:
-                    st.write("**Marcar Obligación como Completada Hoy**")
-                    opciones_act = dict(zip(pendientes['Cliente'] + " - " + pendientes['descripcion'], zip(pendientes['id_x'], pendientes['mes_objetivo'], pendientes['anio_objetivo'])))
-
-                    with st.form("completar_tarea"):
-                        obl_a_act = st.selectbox("Selecciona la obligación completada:", list(opciones_act.keys()))
-                        fecha_ent = st.date_input("Fecha de Entrega", value=hoy)
-                        btn_compl = st.form_submit_button("Registrar Cumplimiento")
-                        if btn_compl:
-                            obl_id, obl_mes, obl_anio = opciones_act[obl_a_act]
-                            db.registrar_cumplimiento(obl_id, obl_mes, obl_anio, fecha_ent)
-                            st.success("Cumplimiento registrado.")
+                tareas_marcadas = df_edited[df_edited['Completar'] == True]
+                if not tareas_marcadas.empty:
+                    st.write("---")
+                    st.write(f"Has marcado **{len(tareas_marcadas)}** tareas para completar.")
+                    col_fecha, col_btn = st.columns([1, 1])
+                    with col_fecha:
+                        fecha_ent = st.date_input("Fecha de Entrega para las marcadas", value=hoy)
+                    with col_btn:
+                        st.write("") # Espaciador
+                        st.write("")
+                        if st.button("Guardar Cumplimientos", type="primary"):
+                            for _, row in tareas_marcadas.iterrows():
+                                db.registrar_cumplimiento(row['id_x'], row['mes_objetivo'], row['anio_objetivo'], fecha_ent.strftime('%Y-%m-%d'))
+                            st.success(f"{len(tareas_marcadas)} tareas completadas exitosamente.")
                             st.rerun()
 
     with tab2:
