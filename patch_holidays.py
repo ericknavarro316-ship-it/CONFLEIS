@@ -3,49 +3,13 @@ import re
 with open('app.py', 'r', encoding='utf-8') as f:
     content = f.read()
 
-search = """            hoy = date.today()
+search_ui = """            if st.form_submit_button("Guardar Colores"):
+                db.actualizar_configuracion(conf.get('logo'), color1, color2, color3)
+                st.success("Colores guardados. Actualiza la página para ver los cambios.")"""
 
-            col_mes, col_anio = st.columns(2)"""
+replace_ui = search_ui + """
 
-replace = """            hoy = date.today()
-
-            # Cargar días festivos desde BD
-            df_festivos = db.obtener_dias_festivos()
-            festivos_lista = df_festivos['fecha'].tolist() if not df_festivos.empty else []
-
-            col_mes, col_anio = st.columns(2)"""
-
-content = content.replace(search, replace)
-
-search_calc = """                while base_date.weekday() >= 5:
-                    base_date += timedelta(days=1)
-
-                for _ in range(dias_extra):
-                    base_date += timedelta(days=1)
-                    while base_date.weekday() >= 5:
-                        base_date += timedelta(days=1)"""
-
-replace_calc = """                while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
-                    base_date += timedelta(days=1)
-
-                for _ in range(dias_extra):
-                    base_date += timedelta(days=1)
-                    while base_date.weekday() >= 5 or base_date.strftime('%Y-%m-%d') in festivos_lista:
-                        base_date += timedelta(days=1)"""
-
-content = content.replace(search_calc, replace_calc)
-
-search_ui = """    with col2:
-        st.subheader("2. Colores")"""
-
-replace_ui = """    with col2:
-        st.subheader("2. Colores")"""
-
-# wait, I need to add the UI configuration for holidays to "Configuración de Marca"
-search_ui = """    st.write("---")
-    st.subheader("Vista Previa del Dashboard")"""
-
-replace_ui = """    st.write("---")
+    st.write("---")
     st.subheader("🏖️ Configuración de Días Festivos")
     st.write("Agrega los días que tu despacho no labora. El sistema los saltará automáticamente al calcular los vencimientos fiscales.")
 
@@ -74,9 +38,7 @@ replace_ui = """    st.write("---")
                     st.rerun()
         else:
             st.info("No hay días festivos registrados.")
-
-    st.write("---")
-    st.subheader("Vista Previa del Dashboard")"""
+"""
 
 content = content.replace(search_ui, replace_ui)
 
