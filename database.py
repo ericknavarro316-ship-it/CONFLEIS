@@ -758,7 +758,7 @@ def agregar_obligacion(cliente_id, descripcion, notas="", dia_habil_extra=0):
 def obtener_obligaciones(tipo_persona=None, cliente_id=None):
     conn = sqlite3.connect(DB_NAME)
     query = '''
-        SELECT o.id, c.nombre as Cliente, o.descripcion, o.notas, o.dia_habil_extra, c.id as cliente_id, c.rfc, c.regimen
+        SELECT o.id, c.nombre as Cliente, o.descripcion, o.notas, o.dia_habil_extra, c.id as cliente_id, c.rfc
         FROM obligaciones o
         JOIN clientes c ON o.cliente_id = c.id
         WHERE 1=1
@@ -952,3 +952,23 @@ def eliminar_departamento(id):
         return True, "Departamento eliminado."
     except Exception as e:
         return False, str(e)
+
+def obtener_dias_festivos():
+    conn = sqlite3.connect(DB_NAME)
+    df = pd.read_sql_query("SELECT * FROM dias_festivos ORDER BY fecha ASC", conn)
+    conn.close()
+    return df
+
+def agregar_dia_festivo(fecha, descripcion):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO dias_festivos (fecha, descripcion) VALUES (?, ?)", (fecha, descripcion))
+    conn.commit()
+    conn.close()
+
+def eliminar_dia_festivo(id_festivo):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM dias_festivos WHERE id = ?", (id_festivo,))
+    conn.commit()
+    conn.close()
