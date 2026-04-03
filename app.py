@@ -561,9 +561,14 @@ if seleccion == "Mi Despacho (Finanzas)":
             st.subheader("Estado de Obligaciones (Global)")
             obligaciones_df = db.obtener_obligaciones()
             if not obligaciones_df.empty:
-                conteo_obs = obligaciones_df['estado'].value_counts().reset_index()
+                df_dash = procesar_obligaciones_del_mes(obligaciones_df)
+                def get_status(row):
+                    if pd.notna(row['fecha_de_entrega']): return 'Completada'
+                    if pd.notna(row.get('semaforo', '')) and 'Vencida' in str(row.get('semaforo', '')): return 'Vencida'
+                    return 'Pendiente'
+                df_dash['Estado'] = df_dash.apply(get_status, axis=1)
+                conteo_obs = df_dash['Estado'].value_counts().reset_index()
                 conteo_obs.columns = ['Estado', 'Cantidad']
-                # Asignar colores según estado
                 color_map = {'Completada': '#198754', 'Pendiente': '#ffc107', 'Vencida': '#dc3545'}
                 fig2 = px.pie(conteo_obs, values="Cantidad", names="Estado", hole=0.4,
                               color="Estado", color_discrete_map=color_map)
@@ -599,7 +604,11 @@ elif seleccion == "Dashboard":
     total_morales = len(clientes_df[clientes_df['tipo_persona'] == 'Moral']) if not clientes_df.empty else 0
     
     obligaciones_df = db.obtener_obligaciones()
-    pendientes = len(obligaciones_df[obligaciones_df['estado'] == 'Pendiente']) if not obligaciones_df.empty else 0
+    if not obligaciones_df.empty:
+        df_pend = procesar_obligaciones_del_mes(obligaciones_df)
+        pendientes = len(df_pend[pd.isna(df_pend['fecha_de_entrega'])])
+    else:
+        pendientes = 0
 
     with col1:
         st.metric(label="Total de Clientes", value=total_clientes)
@@ -654,13 +663,13 @@ elif seleccion == "Dashboard":
     if not obligaciones_df.empty:
         obligaciones_df = procesar_obligaciones_del_mes(obligaciones_df)
         ob_semaforo = calcular_semaforo(obligaciones_df)
-        alertas = ob_semaforo[(ob_semaforo['estado'] == 'Pendiente') &
-                              (ob_semaforo['semaforo'].str.startswith('🔴') | ob_semaforo['semaforo'].str.startswith('🟠'))]
+        alertas = ob_semaforo[(pd.isna(ob_semaforo['fecha_de_entrega'])) &
+                              (ob_semaforo['semaforo'].str.startswith('🔴') | ob_semaforo['semaforo'].str.startswith('🟠') | ob_semaforo['semaforo'].str.startswith('🟡'))]
         if alertas.empty:
             st.success("¡Todo al día! No hay obligaciones urgentes próximas a vencer.")
         else:
             st.dataframe(
-                alertas.style.map(estilo_semaforo, subset=['semaforo', 'estado']),
+                alertas.style.map(estilo_semaforo, subset=['semaforo']),
                 use_container_width=True, hide_index=True
             )
     else:
@@ -723,7 +732,7 @@ elif seleccion in ["Personas Físicas", "Personas Morales"]:
              obligaciones_df = procesar_obligaciones_del_mes(obligaciones_df)
              ob_semaforo = calcular_semaforo(obligaciones_df)
              st.dataframe(
-                 ob_semaforo.style.map(estilo_semaforo, subset=['semaforo', 'estado']),
+                 ob_semaforo.style.map(estilo_semaforo, subset=['semaforo']),
                  use_container_width=True, hide_index=True
              )
 
