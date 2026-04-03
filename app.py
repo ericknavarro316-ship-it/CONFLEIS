@@ -389,6 +389,7 @@ def procesar_obligaciones_del_mes(df_obligaciones, mes_objetivo=None, anio_objet
         return df_merged
     else:
         df_out['fecha_de_entrega'] = pd.NA
+        df_out['id_x'] = df_out['id']
         return df_out
 
 def calcular_semaforo(df):
