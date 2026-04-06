@@ -274,6 +274,14 @@ def init_db():
     ''')
     
     # Tabla Kanban (Tareas del Staff)
+    # Add migration for Kanban integration if columns are missing
+    try:
+        cursor.execute("ALTER TABLE kanban_tareas ADD COLUMN obligacion_id INTEGER")
+        cursor.execute("ALTER TABLE kanban_tareas ADD COLUMN mes_objetivo INTEGER")
+        cursor.execute("ALTER TABLE kanban_tareas ADD COLUMN anio_objetivo INTEGER")
+    except:
+        pass
+
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS kanban_tareas (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -282,6 +290,9 @@ def init_db():
             columna TEXT DEFAULT 'Por Revisar',
             asignado_a INTEGER,
             fecha_creacion DATETIME DEFAULT CURRENT_TIMESTAMP,
+            obligacion_id INTEGER,
+            mes_objetivo INTEGER,
+            anio_objetivo INTEGER,
             FOREIGN KEY (cliente_id) REFERENCES clientes (id) ON DELETE CASCADE,
             FOREIGN KEY (asignado_a) REFERENCES usuarios_despacho (id) ON DELETE SET NULL
         )
@@ -573,17 +584,20 @@ def actualizar_configuracion(logo_ruta, c1, c2, c3):
 
 # --- Funciones para Kanban y Líneas de Captura ---
 
-def crear_tarea_kanban(cliente_id, descripcion, asignado_a=None):
+def crear_tarea_kanban(cliente_id, descripcion, asignado_a=None, obligacion_id=None, mes_objetivo=None, anio_objetivo=None):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO kanban_tareas (cliente_id, descripcion, asignado_a) VALUES (?, ?, ?)", (cliente_id, descripcion, asignado_a))
+    cursor.execute(
+        "INSERT INTO kanban_tareas (cliente_id, descripcion, asignado_a, obligacion_id, mes_objetivo, anio_objetivo) VALUES (?, ?, ?, ?, ?, ?)",
+        (cliente_id, descripcion, asignado_a, obligacion_id, mes_objetivo, anio_objetivo)
+    )
     conn.commit()
     conn.close()
 
 def obtener_tareas_kanban(columna=None):
     conn = sqlite3.connect(DB_NAME)
     query = '''
-        SELECT k.id, c.nombre as Cliente, k.descripcion, k.columna, u.nombre as Asignado, k.fecha_creacion, c.id as cliente_id
+        SELECT k.id, c.nombre as Cliente, k.descripcion, k.columna, u.nombre as Asignado, k.fecha_creacion, c.id as cliente_id, k.obligacion_id, k.mes_objetivo, k.anio_objetivo
         FROM kanban_tareas k
         JOIN clientes c ON k.cliente_id = c.id
         LEFT JOIN usuarios_despacho u ON k.asignado_a = u.id
