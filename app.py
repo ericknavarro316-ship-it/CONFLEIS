@@ -563,6 +563,7 @@ if seleccion == "Mi Despacho (Finanzas)":
             obligaciones_df = db.obtener_obligaciones()
             if not obligaciones_df.empty:
                 df_dash = procesar_obligaciones_del_mes(obligaciones_df)
+                df_dash = calcular_semaforo(df_dash)
                 def get_status(row):
                     if pd.notna(row['fecha_de_entrega']): return 'Completada'
                     if pd.notna(row.get('semaforo', '')) and 'Vencida' in str(row.get('semaforo', '')): return 'Vencida'
@@ -1489,10 +1490,10 @@ elif seleccion == "Expediente de Cliente":
              with col_hdr2:
                  with st.popover("➕ Agregar Acceso", use_container_width=True):
                      with st.form("nueva_credencial"):
-                         tipo_acceso = st.selectbox("Tipo", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"])
-                         usuario = st.text_input("Usuario / RFC")
-                         contrasena = st.text_input("Contraseña", type="password")
-                         notas = st.text_input("Notas / Vencimiento")
+                         tipo_acceso = st.selectbox("Tipo", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"], key=f"add_tipo_{cliente_id}")
+                         usuario = st.text_input("Usuario / RFC", value=datos_cliente.get('rfc', ''), key=f"add_usuario_{cliente_id}")
+                         contrasena = st.text_input("Contraseña", type="password", key=f"add_pw_{cliente_id}")
+                         notas = st.text_input("Notas / Vencimiento", key=f"add_notas_{cliente_id}")
                          if st.form_submit_button("Guardar", type="primary") and tipo_acceso and contrasena:
                               db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
                               st.rerun()
@@ -1529,10 +1530,10 @@ elif seleccion == "Expediente de Cliente":
                              with col_btn1:
                                  with st.popover("✏️ Editar"):
                                      with st.form(f"edit_cred_{row['id']}"):
-                                         e_tipo = st.selectbox("Tipo", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"], index=["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"].index(row['tipo_acceso']) if row['tipo_acceso'] in ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"] else 6)
-                                         e_usu = st.text_input("Usuario", value=row['usuario'])
-                                         e_pas = st.text_input("Contraseña", value=row['contrasena'])
-                                         e_not = st.text_input("Notas", value=row['notas'])
+                                         e_tipo = st.selectbox("Tipo", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"], index=["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"].index(row['tipo_acceso']) if row['tipo_acceso'] in ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"] else 6, key=f"e_tipo_{row['id']}")
+                                         e_usu = st.text_input("Usuario", value=row['usuario'], key=f"e_usu_{row['id']}")
+                                         e_pas = st.text_input("Contraseña", value=row['contrasena'], key=f"e_pas_{row['id']}")
+                                         e_not = st.text_input("Notas", value=row['notas'] if row['notas'] else "", key=f"e_not_{row['id']}")
                                          if st.form_submit_button("Actualizar"):
                                              db.actualizar_credencial(row['id'], e_tipo, e_usu, e_pas, e_not)
                                              st.rerun()
