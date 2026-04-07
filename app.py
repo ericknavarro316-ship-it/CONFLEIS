@@ -1483,34 +1483,63 @@ elif seleccion == "Expediente de Cliente":
              st.plotly_chart(fig, use_container_width=True)
              
         with tab_boveda:
-             st.subheader("Accesos y Contraseñas Seguras")
+             col_hdr1, col_hdr2 = st.columns([3, 1])
+             with col_hdr1:
+                 st.subheader("🔐 Bóveda de Accesos")
+             with col_hdr2:
+                 with st.popover("➕ Agregar Acceso", use_container_width=True):
+                     with st.form("nueva_credencial"):
+                         tipo_acceso = st.selectbox("Tipo", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"])
+                         usuario = st.text_input("Usuario / RFC")
+                         contrasena = st.text_input("Contraseña", type="password")
+                         notas = st.text_input("Notas / Vencimiento")
+                         if st.form_submit_button("Guardar", type="primary") and tipo_acceso and contrasena:
+                              db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
+                              st.rerun()
+
              cred_df = db.obtener_credenciales(cliente_id)
-             with st.expander("Ver Accesos Guardados"):
-                  if cred_df.empty: st.info("No hay accesos guardados.")
-                  else:
-                      for _, row in cred_df.iterrows():
-                          with st.container(border=True):
-                              ccol1, ccol2, ccol3 = st.columns([2, 2, 1])
-                              with ccol1:
-                                  st.write(f"**{row['tipo_acceso']}**: {row['usuario']}")
-                              with ccol2:
-                                  if st.checkbox("Mostrar Contraseña", key=f"show_pw_{row['id']}"): st.code(row['contrasena'])
-                                  else: st.code("********")
-                                  if row['notas']: st.caption(f"Notas: {row['notas']}")
-                              with ccol3:
-                                  if st.button("Eliminar", key=f"del_cred_{row['id']}"):
-                                      db.eliminar_credencial(row['id'])
-                                      st.rerun()
-                                      
-             with st.expander("Agregar Nuevo Acceso"):
-                  with st.form("nueva_credencial"):
-                      tipo_acceso = st.selectbox("Tipo de Acceso", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Otro"])
-                      usuario = st.text_input("Usuario / RFC")
-                      contrasena = st.text_input("Contraseña", type="password")
-                      notas = st.text_input("Notas / Vencimiento")
-                      if st.form_submit_button("Guardar Acceso Seguramente") and tipo_acceso and contrasena:
-                           db.agregar_credencial(cliente_id, tipo_acceso, usuario, contrasena, notas)
-                           st.rerun()
+             if cred_df.empty:
+                 st.info("No hay accesos guardados. Haz clic en 'Agregar Acceso' para empezar.")
+             else:
+                 # Icon mapping
+                 icon_map = {
+                     "CIEC (SAT)": "🏛️", "FIEL (Vencimiento)": "🔏", "IMSS (IDSE)": "🏥",
+                     "SIPARE": "🏥", "Portal Estatal": "🏢", "Bancario": "🏦", "Otro": "🔑"
+                 }
+
+                 # Display cards in a grid (3 columns)
+                 cols = st.columns(3)
+                 for i, row in cred_df.iterrows():
+                     with cols[i % 3]:
+                         with st.container(border=True):
+                             icon = icon_map.get(row['tipo_acceso'], "🔑")
+                             st.markdown(f"**{icon} {row['tipo_acceso']}**")
+                             st.caption(f"👤 {row['usuario']}")
+
+                             if st.toggle("Mostrar / Copiar", key=f"show_pw_{row['id']}"):
+                                 st.code(row['contrasena'])
+                             else:
+                                 st.code("********")
+
+                             if row['notas']:
+                                 st.caption(f"📝 {row['notas']}")
+
+                             # Acciones Editar y Eliminar
+                             col_btn1, col_btn2 = st.columns(2)
+                             with col_btn1:
+                                 with st.popover("✏️ Editar"):
+                                     with st.form(f"edit_cred_{row['id']}"):
+                                         e_tipo = st.selectbox("Tipo", ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"], index=["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"].index(row['tipo_acceso']) if row['tipo_acceso'] in ["CIEC (SAT)", "FIEL (Vencimiento)", "IMSS (IDSE)", "SIPARE", "Portal Estatal", "Bancario", "Otro"] else 6)
+                                         e_usu = st.text_input("Usuario", value=row['usuario'])
+                                         e_pas = st.text_input("Contraseña", value=row['contrasena'])
+                                         e_not = st.text_input("Notas", value=row['notas'])
+                                         if st.form_submit_button("Actualizar"):
+                                             db.actualizar_credencial(row['id'], e_tipo, e_usu, e_pas, e_not)
+                                             st.rerun()
+                             with col_btn2:
+                                 if st.button("🗑️ Borrar", key=f"del_cred_{row['id']}", use_container_width=True):
+                                     db.eliminar_credencial(row['id'])
+                                     st.rerun()
                            
         with tab_archivo:
              st.subheader("Gestor Documental Seguro")

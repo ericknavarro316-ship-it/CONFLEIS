@@ -845,6 +845,17 @@ def obtener_credenciales(cliente_id):
     conn.close()
     return df
 
+def actualizar_credencial(credencial_id, tipo_acceso, usuario, contrasena, notas=""):
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('''
+        UPDATE credenciales
+        SET tipo_acceso = ?, usuario = ?, contrasena = ?, notas = ?
+        WHERE id = ?
+    ''', (tipo_acceso, usuario, contrasena, notas, credencial_id))
+    conn.commit()
+    conn.close()
+
 def eliminar_credencial(credencial_id):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
